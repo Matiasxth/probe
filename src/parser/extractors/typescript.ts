@@ -185,6 +185,40 @@ export function extractTypeScript(tree: Parser.Tree, source: string, isTsx: bool
             currentFunction = prevFunc;
             return;
           }
+
+          // CJS: const X = require('./foo') or const { a, b } = require('./foo')
+          if (nameNode && valueNode && valueNode.type === 'call_expression') {
+            const fn = valueNode.childForFieldName('function');
+            if (fn?.text === 'require') {
+              const args = valueNode.childForFieldName('arguments');
+              const firstArg = args?.namedChildren[0];
+              if (firstArg?.type === 'string') {
+                const sourcePath = firstArg.text.replace(/['"]/g, '');
+                if (nameNode.type === 'identifier') {
+                  // const X = require('./foo')
+                  imports.push({ sourcePath, importedNames: [nameNode.text], isDefault: true, isNamespace: true });
+                } else if (nameNode.type === 'object_pattern') {
+                  // const { a, b } = require('./foo')
+                  const names: string[] = [];
+                  const origNames: Record<string, string> = {};
+                  for (const prop of nameNode.namedChildren) {
+                    if (prop.type === 'shorthand_property_identifier_pattern') {
+                      names.push(prop.text);
+                    } else if (prop.type === 'pair_pattern') {
+                      const key = prop.childForFieldName('key');
+                      const val = prop.childForFieldName('value');
+                      const localName = val?.text ?? key?.text ?? prop.text;
+                      const origName = key?.text ?? prop.text;
+                      names.push(localName);
+                      if (origName !== localName) origNames[localName] = origName;
+                    }
+                  }
+                  const hasAliases = Object.keys(origNames).length > 0;
+                  imports.push({ sourcePath, importedNames: names, ...(hasAliases ? { originalNames: origNames } : {}), isDefault: false, isNamespace: false });
+                }
+              }
+            }
+          }
         }
         break;
       }
@@ -308,6 +342,7 @@ export function extractTypeScript(tree: Parser.Tree, source: string, isTsx: bool
         if (sourceNode) {
           const sourcePath = sourceNode.text.replace(/['"]/g, '');
           const importedNames: string[] = [];
+          const originalNames: Record<string, string> = {};
           let isDefault = false;
           let isNamespace = false;
 
@@ -322,7 +357,12 @@ export function extractTypeScript(tree: Parser.Tree, source: string, isTsx: bool
                     if (spec.type === 'import_specifier') {
                       const alias = spec.childForFieldName('alias');
                       const name = spec.childForFieldName('name');
-                      importedNames.push(alias?.text ?? name?.text ?? spec.text);
+                      const localName = alias?.text ?? name?.text ?? spec.text;
+                      const origName = name?.text ?? spec.text;
+                      importedNames.push(localName);
+                      if (alias && origName !== localName) {
+                        originalNames[localName] = origName;
+                      }
                     }
                   }
                 } else if (c.type === 'namespace_import') {
@@ -334,7 +374,8 @@ export function extractTypeScript(tree: Parser.Tree, source: string, isTsx: bool
             }
           }
 
-          imports.push({ sourcePath, importedNames, isDefault, isNamespace });
+          const hasAliases = Object.keys(originalNames).length > 0;
+          imports.push({ sourcePath, importedNames, ...(hasAliases ? { originalNames } : {}), isDefault, isNamespace });
         }
         break;
       }
@@ -410,6 +451,33 @@ export function extractTypeScript(tree: Parser.Tree, source: string, isTsx: bool
                 calleeName,
                 line: node.startPosition.row + 1,
               });
+            }
+          }
+        }
+        break;
+      }
+
+      // === CJS: module.exports / exports.X ===
+      case 'expression_statement': {
+        const expr = node.namedChildren[0];
+        if (expr?.type === 'assignment_expression') {
+          const left = expr.childForFieldName('left');
+          if (left?.type === 'member_expression') {
+            const obj = left.childForFieldName('object');
+            const prop = left.childForFieldName('property');
+            // module.exports = X → mark X as default export
+            if (obj?.text === 'module' && prop?.text === 'exports') {
+              const right = expr.childForFieldName('right');
+              if (right?.type === 'identifier') {
+                // Find the symbol and mark it as exported
+                const sym = symbols.find((s) => s.name === right.text);
+                if (sym) { sym.isExported = true; sym.isDefault = true; }
+              }
+            }
+            // exports.foo = ... → mark foo as exported
+            if (obj?.text === 'exports' && prop) {
+              const existing = symbols.find((s) => s.name === prop.text);
+              if (existing) { existing.isExported = true; }
             }
           }
         }

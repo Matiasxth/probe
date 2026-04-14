@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS imports (
   file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
   source_path TEXT NOT NULL,
   imported_names TEXT NOT NULL DEFAULT '[]',
+  original_names TEXT NOT NULL DEFAULT '{}',
   is_default INTEGER NOT NULL DEFAULT 0,
   is_namespace INTEGER NOT NULL DEFAULT 0
 );

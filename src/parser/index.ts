@@ -8,6 +8,8 @@ import { getParser, parseSource } from './tree-sitter.js';
 import { extractTypeScript } from './extractors/typescript.js';
 import { extractPython } from './extractors/python.js';
 import { extractGo } from './extractors/go.js';
+import { extractRust } from './extractors/rust.js';
+import { extractJava } from './extractors/java.js';
 import { insertParsedFile } from '../storage/queries.js';
 import type { ParsedFile, ProbeConfig } from '../types.js';
 import { EXT_TO_LANG, LANG_EXTENSIONS } from '../types.js';
@@ -214,6 +216,12 @@ async function parseFile(absPath: string, relPath: string): Promise<ParsedFile |
     case 'go':
       extracted = extractGo(tree, source);
       break;
+    case 'rust':
+      extracted = extractRust(tree, source);
+      break;
+    case 'java':
+      extracted = extractJava(tree, source);
+      break;
     default:
       return null;
   }
@@ -267,22 +275,37 @@ export function resolveCallGraph(db: Database.Database, root?: string): number {
 
   // 3. Build import resolution: fileId → {importedName → resolved source path}
   const allImports = db.prepare(`
-    SELECT i.file_id, i.source_path, i.imported_names, f.path as file_path
+    SELECT i.file_id, i.source_path, i.imported_names, i.original_names, f.path as file_path
     FROM imports i
     JOIN files f ON f.id = i.file_id
   `).all() as Array<{
-    file_id: number; source_path: string; imported_names: string; file_path: string;
+    file_id: number; source_path: string; imported_names: string; original_names: string; file_path: string;
   }>;
 
+  // importMap: fileId → { localName → resolvedSourcePath }
   const importMap = new Map<number, Map<string, string>>();
+  // aliasMap: fileId → { localName → originalName } (only for aliased imports)
+  const aliasMap = new Map<number, Map<string, string>>();
+
   for (const imp of allImports) {
     const map = importMap.get(imp.file_id) ?? new Map();
     const names = JSON.parse(imp.imported_names) as string[];
+    const origNames = JSON.parse(imp.original_names || '{}') as Record<string, string>;
     const resolvedSource = resolveImportPath(imp.file_path, imp.source_path);
+
     for (const name of names) {
       map.set(name, resolvedSource);
     }
     importMap.set(imp.file_id, map);
+
+    // Store alias mappings
+    if (Object.keys(origNames).length > 0) {
+      const aMap = aliasMap.get(imp.file_id) ?? new Map();
+      for (const [alias, original] of Object.entries(origNames)) {
+        aMap.set(alias, original);
+      }
+      aliasMap.set(imp.file_id, aMap);
+    }
   }
 
   // 4. Read all raw call sites from staging table
@@ -327,7 +350,11 @@ export function resolveCallGraph(db: Database.Database, root?: string): number {
         if (fileImports) {
           const sourcePath = fileImports.get(cs.callee_name);
           if (sourcePath) {
-            const candidates = nameIndex.get(cs.callee_name);
+            // Check if this name is an alias — use original name for target lookup
+            const fileAliases = aliasMap.get(cs.file_id);
+            const targetName = fileAliases?.get(cs.callee_name) ?? cs.callee_name;
+
+            const candidates = nameIndex.get(targetName);
             if (candidates) {
               const match = candidates.find((c) =>
                 c.filePath === sourcePath ||
@@ -341,9 +368,11 @@ export function resolveCallGraph(db: Database.Database, root?: string): number {
         }
       }
 
-      // c) Global: any exported symbol with this name
+      // c) Global: any exported symbol with this name (try alias→original too)
       if (!calleeId) {
-        const candidates = nameIndex.get(cs.callee_name);
+        const fileAliases = aliasMap.get(cs.file_id);
+        const targetName = fileAliases?.get(cs.callee_name) ?? cs.callee_name;
+        const candidates = nameIndex.get(targetName) ?? nameIndex.get(cs.callee_name);
         if (candidates) {
           const exported = candidates.find((c) => c.isExported && c.fileId !== cs.file_id);
           if (exported) calleeId = exported.id;

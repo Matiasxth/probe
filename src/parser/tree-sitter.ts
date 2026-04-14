@@ -13,6 +13,8 @@ const WASM_MAP: Record<string, string> = {
   javascript: 'tree-sitter-javascript.wasm',
   python: 'tree-sitter-python.wasm',
   go: 'tree-sitter-go.wasm',
+  rust: 'tree-sitter-rust.wasm',
+  java: 'tree-sitter-java.wasm',
 };
 
 async function init(): Promise<void> {

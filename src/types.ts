@@ -13,7 +13,7 @@ export interface ProbeConfig {
 export const DEFAULT_CONFIG: ProbeConfig = {
   version: 1,
   exclude: ['node_modules', 'dist', 'build', '.git', 'vendor', '__pycache__', '.probe', 'coverage', '.next', '.nuxt'],
-  languages: ['typescript', 'javascript', 'python', 'go'],
+  languages: ['typescript', 'javascript', 'python', 'go', 'rust', 'java'],
   gitHistory: {
     maxCommits: 500,
     minCoChangeConfidence: 0.5,
@@ -27,6 +27,8 @@ export const LANG_EXTENSIONS: Record<string, string[]> = {
   javascript: ['.js', '.jsx', '.mjs', '.cjs'],
   python: ['.py'],
   go: ['.go'],
+  rust: ['.rs'],
+  java: ['.java'],
 };
 
 export const EXT_TO_LANG: Record<string, string> = Object.fromEntries(
@@ -126,7 +128,8 @@ export interface ParsedSymbol {
 
 export interface ParsedImport {
   sourcePath: string;
-  importedNames: string[];
+  importedNames: string[];          // local names (what the code uses)
+  originalNames?: Record<string, string>;  // alias → original name mapping (only if different)
   isDefault: boolean;
   isNamespace: boolean;
 }

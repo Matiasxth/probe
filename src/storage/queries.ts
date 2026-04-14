@@ -37,12 +37,13 @@ export function insertSymbol(
 
 export function insertImport(db: Database.Database, fileId: number, imp: ParsedImport): void {
   db.prepare(`
-    INSERT INTO imports (file_id, source_path, imported_names, is_default, is_namespace)
-    VALUES (?, ?, ?, ?, ?)
+    INSERT INTO imports (file_id, source_path, imported_names, original_names, is_default, is_namespace)
+    VALUES (?, ?, ?, ?, ?, ?)
   `).run(
     fileId,
     imp.sourcePath,
     JSON.stringify(imp.importedNames),
+    JSON.stringify(imp.originalNames ?? {}),
     imp.isDefault ? 1 : 0,
     imp.isNamespace ? 1 : 0,
   );

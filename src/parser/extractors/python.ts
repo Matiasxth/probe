@@ -144,6 +144,7 @@ export function extractPython(tree: Parser.Tree, source: string): {
         const moduleNode = node.childForFieldName('module_name');
         const sourcePath = moduleNode?.text ?? '';
         const importedNames: string[] = [];
+        const originalNames: Record<string, string> = {};
 
         for (const child of node.namedChildren) {
           if (child.type === 'dotted_name' && child !== moduleNode) {
@@ -151,16 +152,23 @@ export function extractPython(tree: Parser.Tree, source: string): {
           } else if (child.type === 'aliased_import') {
             const alias = child.childForFieldName('alias');
             const name = child.childForFieldName('name');
-            importedNames.push(alias?.text ?? name?.text ?? child.text);
+            const localName = alias?.text ?? name?.text ?? child.text;
+            const origName = name?.text ?? child.text;
+            importedNames.push(localName);
+            if (alias && origName !== localName) {
+              originalNames[localName] = origName;
+            }
           } else if (child.type === 'wildcard_import') {
             importedNames.push('*');
           }
         }
 
         if (sourcePath) {
+          const hasAliases = Object.keys(originalNames).length > 0;
           imports.push({
             sourcePath,
             importedNames,
+            ...(hasAliases ? { originalNames } : {}),
             isDefault: false,
             isNamespace: importedNames.includes('*'),
           });
