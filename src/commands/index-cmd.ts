@@ -57,7 +57,7 @@ export async function indexCommand(opts: { root: string; git?: boolean; verbose?
 
   // Phase 2: Resolve call graph
   console.log(chalk.dim('  Resolving call graph...'));
-  const calls = resolveCallGraph(db);
+  const calls = resolveCallGraph(db, root);
   const methodCalls = resolveMethodCalls(db);
   console.log(`  ${chalk.green('✓')} ${calls + methodCalls} call edges (${calls} static, ${methodCalls} method)`);
 

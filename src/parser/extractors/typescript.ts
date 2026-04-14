@@ -270,6 +270,37 @@ export function extractTypeScript(tree: Parser.Tree, source: string): {
         break;
       }
 
+      // === Re-exports: export { foo, bar } from './module' ===
+      case 'export_statement': {
+        const sourceNode = node.childForFieldName('source');
+        if (sourceNode) {
+          // This is a re-export: export { X } from './foo' or export * from './foo'
+          const sourcePath = sourceNode.text.replace(/['"]/g, '');
+          const importedNames: string[] = [];
+          let isNamespace = false;
+
+          for (const child of node.namedChildren) {
+            if (child.type === 'export_clause') {
+              for (const spec of child.namedChildren) {
+                if (spec.type === 'export_specifier') {
+                  const name = spec.childForFieldName('name');
+                  const alias = spec.childForFieldName('alias');
+                  importedNames.push(alias?.text ?? name?.text ?? spec.text);
+                }
+              }
+            } else if (child.text === '*') {
+              isNamespace = true;
+            }
+          }
+
+          if (importedNames.length > 0 || isNamespace) {
+            imports.push({ sourcePath, importedNames, isDefault: false, isNamespace });
+          }
+        }
+        // Don't break — let it fall through to walkChildren for nested declarations
+        break;
+      }
+
       // === Call expressions ===
       case 'call_expression': {
         if (currentFunction) {

@@ -46,7 +46,9 @@ export function extractPython(tree: Parser.Tree, source: string): {
 
   function walk(node: Parser.SyntaxNode): void {
     switch (node.type) {
-      case 'function_definition': {
+      case 'function_definition':
+      case 'async_function_definition': {
+        const isAsync = node.type === 'async_function_definition';
         const nameNode = node.childForFieldName('name');
         if (nameNode) {
           const name = nameNode.text;
@@ -59,7 +61,7 @@ export function extractPython(tree: Parser.Tree, source: string): {
 
           const params = node.childForFieldName('parameters');
           const returnType = node.childForFieldName('return_type');
-          let sig = `def ${name}(${params?.text ?? ''})`;
+          let sig = isAsync ? `async def ${name}(${params?.text ?? ''})` : `def ${name}(${params?.text ?? ''})`;
           if (returnType) sig += ` -> ${returnType.text}`;
 
           const kind: SymbolKind = isMethod ? 'method' : 'function';
@@ -184,25 +186,70 @@ export function extractPython(tree: Parser.Tree, source: string): {
         break;
       }
 
-      // === Variable assignments at module level (constants) ===
+      // === Variable assignments ===
       case 'expression_statement': {
-        if (!currentFunction && !currentClass && node.parent?.type === 'module') {
-          const assign = node.namedChildren[0];
-          if (assign?.type === 'assignment') {
-            const left = assign.childForFieldName('left');
-            if (left?.type === 'identifier' && left.text === left.text.toUpperCase() && left.text.length > 1) {
+        const assign = node.namedChildren[0];
+        if (assign?.type === 'assignment') {
+          const left = assign.childForFieldName('left');
+          if (left?.type === 'identifier') {
+            // Module-level UPPER_CASE = constants
+            if (!currentFunction && !currentClass && node.parent?.type === 'module') {
+              if (left.text === left.text.toUpperCase() && left.text.length > 1) {
+                symbols.push({
+                  name: left.text,
+                  kind: 'constant',
+                  lineStart: node.startPosition.row + 1,
+                  lineEnd: node.endPosition.row + 1,
+                  signature: lines[node.startPosition.row]?.trim() ?? '',
+                  docComment: null,
+                  isExported: !left.text.startsWith('_'),
+                  isDefault: false,
+                  parentName: null,
+                });
+              }
+            }
+            // Class-level variables (Pydantic fields, dataclass fields, Django model fields)
+            if (currentClass && !currentFunction) {
+              const lineText = lines[node.startPosition.row]?.trim() ?? '';
               symbols.push({
                 name: left.text,
-                kind: 'constant',
+                kind: 'variable',
                 lineStart: node.startPosition.row + 1,
                 lineEnd: node.endPosition.row + 1,
-                signature: lines[node.startPosition.row]?.trim() ?? '',
+                signature: lineText.length > 200 ? lineText.slice(0, 200) + '...' : lineText,
                 docComment: null,
                 isExported: !left.text.startsWith('_'),
                 isDefault: false,
-                parentName: null,
+                parentName: currentClass,
               });
             }
+          }
+        }
+        // Type-annotated assignments: name: Type = value
+        if (assign?.type === 'type' || node.namedChildren[0]?.type === 'type') {
+          // handled by the above
+        }
+        break;
+      }
+
+      // === Type-annotated class variables (name: Type or name: Type = value) ===
+      case 'typed_assignment':
+      case 'typed_parameter': {
+        if (currentClass && !currentFunction) {
+          const left = node.childForFieldName('name') ?? node.namedChildren[0];
+          if (left?.type === 'identifier') {
+            const lineText = lines[node.startPosition.row]?.trim() ?? '';
+            symbols.push({
+              name: left.text,
+              kind: 'variable',
+              lineStart: node.startPosition.row + 1,
+              lineEnd: node.endPosition.row + 1,
+              signature: lineText.length > 200 ? lineText.slice(0, 200) + '...' : lineText,
+              docComment: null,
+              isExported: !left.text.startsWith('_'),
+              isDefault: false,
+              parentName: currentClass,
+            });
           }
         }
         break;

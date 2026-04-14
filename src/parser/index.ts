@@ -232,7 +232,10 @@ async function parseFile(absPath: string, relPath: string): Promise<ParsedFile |
  * Uses stored call sites (caller_name + callee_name) from AST parsing,
  * combined with the import graph to resolve callee identity.
  */
-export function resolveCallGraph(db: Database.Database): number {
+export function resolveCallGraph(db: Database.Database, root?: string): number {
+  // Load path aliases for TS resolution
+  if (root) loadPathAliases(root);
+
   // 1. Build symbol lookup: name → [{id, fileId, isExported, filePath}]
   const allSymbols = db.prepare(`
     SELECT s.id, s.name, s.kind, s.file_id, s.is_exported, f.path as file_path
@@ -355,17 +358,61 @@ export function resolveCallGraph(db: Database.Database): number {
   return resolvedCount;
 }
 
+// Cache for tsconfig path aliases
+let pathAliases: Array<{ prefix: string; targets: string[] }> | null = null;
+
+function loadPathAliases(root: string): void {
+  if (pathAliases !== null) return;
+  pathAliases = [];
+
+  const tsconfigPath = path.join(root, 'tsconfig.json');
+  if (!fs.existsSync(tsconfigPath)) return;
+
+  try {
+    const raw = fs.readFileSync(tsconfigPath, 'utf-8');
+    // Strip comments (// and /* */) for JSON parsing
+    const cleaned = raw.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+    const tsconfig = JSON.parse(cleaned);
+    const paths = tsconfig.compilerOptions?.paths;
+    if (!paths) return;
+
+    const baseUrl = tsconfig.compilerOptions?.baseUrl ?? '.';
+
+    for (const [pattern, targets] of Object.entries(paths)) {
+      // "@/*" → prefix "@/", targets ["./src/*"] → ["src/"]
+      const prefix = pattern.replace('*', '');
+      const resolvedTargets = (targets as string[]).map((t) =>
+        path.join(baseUrl, t.replace('*', '')).replace(/\\/g, '/'),
+      );
+      pathAliases.push({ prefix, targets: resolvedTargets });
+    }
+  } catch {
+    // Ignore parse errors
+  }
+}
+
 function resolveImportPath(fromFile: string, importSource: string): string {
   // Relative imports
   if (importSource.startsWith('.')) {
     const dir = path.dirname(fromFile);
     let resolved = path.join(dir, importSource).replace(/\\/g, '/');
-    // Try common extensions
     if (!path.extname(resolved)) {
       resolved = resolved.replace(/\/$/, '');
     }
     return resolved;
   }
+
+  // Path alias resolution (e.g., @/utils → src/utils)
+  if (pathAliases) {
+    for (const alias of pathAliases) {
+      if (importSource.startsWith(alias.prefix)) {
+        const rest = importSource.slice(alias.prefix.length);
+        // Return the first target match
+        return (alias.targets[0] + rest).replace(/\\/g, '/');
+      }
+    }
+  }
+
   // Package imports — return as-is
   return importSource;
 }
