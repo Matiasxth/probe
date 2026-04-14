@@ -23,34 +23,100 @@ export async function parseProject(
   db: Database.Database,
   config: ProbeConfig,
   onProgress?: (p: ParseProgress) => void,
-): Promise<{ files: number; symbols: number; errors: string[] }> {
+  incremental: boolean = false,
+): Promise<{ files: number; symbols: number; skipped: number; errors: string[] }> {
   const absRoot = path.resolve(root);
 
   // Build glob patterns for supported languages
   const extensions = config.languages.flatMap((lang) => LANG_EXTENSIONS[lang] ?? []);
   const patterns = extensions.map((ext) => `**/*${ext}`);
 
-  // Load .gitignore + config excludes
+  // Comprehensive exclude list — avoid indexing third-party or generated code
+  const excludeDirs = [
+    ...config.exclude,
+    // Package managers
+    'node_modules', 'bower_components', 'jspm_packages',
+    // Build output
+    'dist', 'build', 'out', 'output', '.next', '.nuxt', '.svelte-kit',
+    // Caches
+    '.cache', '.parcel-cache', '.turbo', '.eslintcache',
+    // VCS
+    '.git', '.svn', '.hg',
+    // Python
+    '__pycache__', '.venv', 'venv', 'env', '.eggs', '*.egg-info',
+    'site-packages', '.mypy_cache', '.pytest_cache', '.tox',
+    // Go
+    'vendor',
+    // IDE
+    '.idea', '.vscode',
+    // Tool dirs
+    '.probe', 'coverage', '.nyc_output',
+    // Common non-source dirs
+    'benchmarks', 'benchmark', 'fixtures', 'third_party', 'third-party',
+    'external', 'deps',
+  ];
+
+  // Load .gitignore + .probeignore + config excludes
   const ig = ignore();
   const gitignorePath = path.join(absRoot, '.gitignore');
   if (fs.existsSync(gitignorePath)) {
     ig.add(fs.readFileSync(gitignorePath, 'utf-8'));
   }
-  ig.add(config.exclude);
+  const probeignorePath = path.join(absRoot, '.probeignore');
+  if (fs.existsSync(probeignorePath)) {
+    ig.add(fs.readFileSync(probeignorePath, 'utf-8'));
+  }
+  ig.add(excludeDirs);
 
   // Discover files
+  const ignoreGlobs = excludeDirs.map((e) => `**/${e}/**`);
   const files = await fg(patterns, {
     cwd: absRoot,
-    ignore: config.exclude.map((e) => `**/${e}/**`),
+    ignore: ignoreGlobs,
     onlyFiles: true,
     absolute: false,
     dot: false,
   });
 
-  // Filter through ignore
-  const filtered = files.filter((f) => !ig.ignores(f));
+  // Additional filter: skip files inside directories containing their own package.json
+  // (nested projects like benchmarks/repos/**)
+  const nestedProjectDirs = new Set<string>();
+  for (const f of files) {
+    const parts = f.split('/');
+    // Check if any parent (excluding root) has a package.json/go.mod/setup.py
+    for (let i = 1; i < parts.length - 1; i++) {
+      const dir = parts.slice(0, i + 1).join('/');
+      if (nestedProjectDirs.has(dir)) continue;
+      const markerFiles = ['package.json', 'go.mod', 'setup.py', 'pyproject.toml', 'Cargo.toml'];
+      for (const marker of markerFiles) {
+        const markerPath = path.join(absRoot, dir, marker);
+        if (fs.existsSync(markerPath)) {
+          nestedProjectDirs.add(dir);
+          break;
+        }
+      }
+    }
+  }
+
+  // Filter through ignore + nested project detection
+  const filtered = files.filter((f) => {
+    if (ig.ignores(f)) return false;
+    // Skip files in nested projects
+    for (const dir of nestedProjectDirs) {
+      if (f.startsWith(dir + '/')) return false;
+    }
+    return true;
+  });
+
+  // Incremental: check existing file hashes
+  const existingHashes = new Map<string, string>();
+  if (incremental) {
+    const rows = db.prepare('SELECT path, hash FROM files').all() as Array<{ path: string; hash: string }>;
+    for (const row of rows) existingHashes.set(row.path, row.hash);
+  }
 
   let totalSymbols = 0;
+  let skipped = 0;
   const errors: string[] = [];
 
   for (let i = 0; i < filtered.length; i++) {
@@ -60,6 +126,26 @@ export async function parseProject(
     onProgress?.({ total: filtered.length, current: i + 1, file: relPath });
 
     try {
+      // Quick hash check for incremental mode
+      if (incremental && existingHashes.has(relPath)) {
+        const currentHash = crypto.createHash('md5').update(fs.readFileSync(absPath, 'utf-8')).digest('hex');
+        if (currentHash === existingHashes.get(relPath)) {
+          // Count existing symbols
+          const count = (db.prepare('SELECT COUNT(*) as c FROM symbols s JOIN files f ON f.id = s.file_id WHERE f.path = ?').get(relPath) as any)?.c ?? 0;
+          totalSymbols += count;
+          skipped++;
+          continue;
+        }
+        // File changed — delete old data and re-parse
+        const oldFile = db.prepare('SELECT id FROM files WHERE path = ?').get(relPath) as { id: number } | undefined;
+        if (oldFile) {
+          db.prepare('DELETE FROM call_sites WHERE file_id = ?').run(oldFile.id);
+          db.prepare('DELETE FROM imports WHERE file_id = ?').run(oldFile.id);
+          db.prepare('DELETE FROM symbols WHERE file_id = ?').run(oldFile.id);
+          db.prepare('DELETE FROM files WHERE id = ?').run(oldFile.id);
+        }
+      }
+
       const parsed = await parseFile(absPath, relPath);
       if (parsed) {
         insertParsedFile(db, parsed);
@@ -70,7 +156,20 @@ export async function parseProject(
     }
   }
 
-  return { files: filtered.length, symbols: totalSymbols, errors };
+  // Remove files that no longer exist on disk
+  if (incremental) {
+    const filteredSet = new Set(filtered.map((f) => f.replace(/\\/g, '/')));
+    for (const [existingPath] of existingHashes) {
+      if (!filteredSet.has(existingPath)) {
+        const oldFile = db.prepare('SELECT id FROM files WHERE path = ?').get(existingPath) as { id: number } | undefined;
+        if (oldFile) {
+          db.prepare('DELETE FROM files WHERE id = ?').run(oldFile.id);
+        }
+      }
+    }
+  }
+
+  return { files: filtered.length, symbols: totalSymbols, skipped, errors };
 }
 
 async function parseFile(absPath: string, relPath: string): Promise<ParsedFile | null> {
@@ -129,22 +228,22 @@ async function parseFile(absPath: string, relPath: string): Promise<ParsedFile |
 }
 
 /**
- * Resolve call sites to actual symbol IDs.
- * Run AFTER all files are parsed and inserted.
+ * Resolve raw call_sites to actual symbol-to-symbol edges in the calls table.
+ * Uses stored call sites (caller_name + callee_name) from AST parsing,
+ * combined with the import graph to resolve callee identity.
  */
 export function resolveCallGraph(db: Database.Database): number {
-  // Build lookup: symbol name → symbol ID (prefer exported)
+  // 1. Build symbol lookup: name → [{id, fileId, isExported, filePath}]
   const allSymbols = db.prepare(`
-    SELECT s.id, s.name, s.kind, s.file_id, s.is_exported, s.parent_symbol_id, f.path as file_path
+    SELECT s.id, s.name, s.kind, s.file_id, s.is_exported, f.path as file_path
     FROM symbols s
     JOIN files f ON f.id = s.file_id
-    WHERE s.kind IN ('function', 'method', 'class')
+    WHERE s.kind IN ('function', 'method', 'class', 'variable', 'constant')
   `).all() as Array<{
     id: number; name: string; kind: string; file_id: number;
-    is_exported: number; parent_symbol_id: number | null; file_path: string;
+    is_exported: number; file_path: string;
   }>;
 
-  // Map: name → [{id, fileId, isExported}]
   const nameIndex = new Map<string, Array<{ id: number; fileId: number; isExported: boolean; filePath: string }>>();
   for (const sym of allSymbols) {
     const entries = nameIndex.get(sym.name) ?? [];
@@ -152,7 +251,15 @@ export function resolveCallGraph(db: Database.Database): number {
     nameIndex.set(sym.name, entries);
   }
 
-  // Get all imports for resolution
+  // 2. Build per-file symbol map: fileId → {name → symbolId}
+  const fileSymbolMap = new Map<number, Map<string, number>>();
+  for (const sym of allSymbols) {
+    const map = fileSymbolMap.get(sym.file_id) ?? new Map();
+    map.set(sym.name, sym.id);
+    fileSymbolMap.set(sym.file_id, map);
+  }
+
+  // 3. Build import resolution: fileId → {importedName → resolved source path}
   const allImports = db.prepare(`
     SELECT i.file_id, i.source_path, i.imported_names, f.path as file_path
     FROM imports i
@@ -161,70 +268,89 @@ export function resolveCallGraph(db: Database.Database): number {
     file_id: number; source_path: string; imported_names: string; file_path: string;
   }>;
 
-  // Build import map: fileId → { importedName → sourceFilePath }
   const importMap = new Map<number, Map<string, string>>();
   for (const imp of allImports) {
     const map = importMap.get(imp.file_id) ?? new Map();
     const names = JSON.parse(imp.imported_names) as string[];
-
-    // Resolve source path relative to the importing file
     const resolvedSource = resolveImportPath(imp.file_path, imp.source_path);
-
     for (const name of names) {
       map.set(name, resolvedSource);
     }
     importMap.set(imp.file_id, map);
   }
 
-  // Get all call sites (stored as caller_name + callee_name in the parsed data)
-  // We need to re-read the parsed call sites from the symbols
-  // Actually, call sites aren't stored yet — we need to resolve them
+  // 4. Read all raw call sites from staging table
+  const rawCallSites = db.prepare(`
+    SELECT cs.file_id, cs.caller_name, cs.callee_name, cs.line
+    FROM call_sites cs
+  `).all() as Array<{
+    file_id: number; caller_name: string; callee_name: string; line: number;
+  }>;
 
-  // For each file, get its symbols and match call sites
-  const allFiles = db.prepare('SELECT id, path FROM files').all() as Array<{ id: number; path: string }>;
-
+  // 5. Resolve each call site to symbol IDs
   const insertCall = db.prepare('INSERT INTO calls (caller_symbol_id, callee_symbol_id, line) VALUES (?, ?, ?)');
+  const seen = new Set<string>(); // deduplicate
   let resolvedCount = 0;
 
-  // We need the raw call sites — but we didn't store them in the DB.
-  // Instead, re-parse to find calls. But that's expensive.
-  // Alternative: store call sites temporarily during initial parse.
-  // For now, we'll use a simpler heuristic: if file A imports symbol X from file B,
-  // and file A has a function that was parsed, create a dependency edge.
+  const resolveTx = db.transaction(() => {
+    for (const cs of rawCallSites) {
+      // Resolve caller: find symbol named cs.caller_name in the same file
+      const fileSymbols = fileSymbolMap.get(cs.file_id);
+      if (!fileSymbols) continue;
 
-  // Actually, let's use the import graph directly for now.
-  // Each import creates a potential call edge from any function in the importing file
-  // to the imported symbol.
+      const callerId = fileSymbols.get(cs.caller_name);
+      if (!callerId) continue;
 
-  for (const file of allFiles) {
-    const fileImports = importMap.get(file.id);
-    if (!fileImports) continue;
+      // Resolve callee: check in order:
+      // a) Same file (local call)
+      // b) Imported symbol (follow import graph)
+      // c) Global match (exported symbol with that name)
+      let calleeId: number | undefined;
 
-    const fileSymbols = db.prepare(
-      'SELECT id, name FROM symbols WHERE file_id = ? AND kind IN (\'function\', \'method\')',
-    ).all(file.id) as Array<{ id: number; name: string }>;
+      // a) Same file
+      calleeId = fileSymbols.get(cs.callee_name);
 
-    for (const [importedName, sourcePath] of fileImports) {
-      // Find the target symbol
-      const candidates = nameIndex.get(importedName);
-      if (!candidates) continue;
-
-      // Prefer the one from the matching source file
-      const target = candidates.find((c) => c.filePath === sourcePath || c.filePath.startsWith(sourcePath))
-        ?? candidates.find((c) => c.isExported);
-
-      if (!target) continue;
-
-      // Create edges from each function in this file to the imported symbol
-      // (simplified — ideally we'd only link functions that actually call it)
-      for (const caller of fileSymbols) {
-        if (caller.id !== target.id) {
-          insertCall.run(caller.id, target.id, 0);
-          resolvedCount++;
+      // b) Import resolution
+      if (!calleeId) {
+        const fileImports = importMap.get(cs.file_id);
+        if (fileImports) {
+          const sourcePath = fileImports.get(cs.callee_name);
+          if (sourcePath) {
+            const candidates = nameIndex.get(cs.callee_name);
+            if (candidates) {
+              const match = candidates.find((c) =>
+                c.filePath === sourcePath ||
+                c.filePath.startsWith(sourcePath + '/') ||
+                c.filePath.replace(/\.[^.]+$/, '') === sourcePath ||
+                c.filePath.replace(/\.[^.]+$/, '').endsWith('/' + sourcePath.split('/').pop()),
+              );
+              if (match) calleeId = match.id;
+            }
+          }
         }
       }
+
+      // c) Global: any exported symbol with this name
+      if (!calleeId) {
+        const candidates = nameIndex.get(cs.callee_name);
+        if (candidates) {
+          const exported = candidates.find((c) => c.isExported && c.fileId !== cs.file_id);
+          if (exported) calleeId = exported.id;
+        }
+      }
+
+      if (!calleeId || calleeId === callerId) continue;
+
+      const key = `${callerId}:${calleeId}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      insertCall.run(callerId, calleeId, cs.line);
+      resolvedCount++;
     }
-  }
+  });
+
+  resolveTx();
 
   return resolvedCount;
 }

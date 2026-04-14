@@ -12,10 +12,20 @@ export function extractTypeScript(tree: Parser.Tree, source: string): {
   const lines = source.split('\n');
 
   function getDocComment(node: Parser.SyntaxNode): string | null {
-    const prev = node.previousNamedSibling;
+    // Check previous sibling of the node itself
+    let prev = node.previousNamedSibling;
     if (prev?.type === 'comment') {
       const text = prev.text;
       if (text.startsWith('/**') || text.startsWith('//')) return text;
+    }
+    // For exported declarations, check previous sibling of the export_statement
+    const parent = node.parent;
+    if (parent?.type === 'export_statement') {
+      prev = parent.previousNamedSibling;
+      if (prev?.type === 'comment') {
+        const text = prev.text;
+        if (text.startsWith('/**') || text.startsWith('//')) return text;
+      }
     }
     return null;
   }

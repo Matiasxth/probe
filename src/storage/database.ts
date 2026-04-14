@@ -67,6 +67,14 @@ CREATE TABLE IF NOT EXISTS patterns (
   PRIMARY KEY (category, name)
 );
 
+CREATE TABLE IF NOT EXISTS call_sites (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+  caller_name TEXT NOT NULL,
+  callee_name TEXT NOT NULL,
+  line INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -84,6 +92,8 @@ CREATE INDEX IF NOT EXISTS idx_type_refs_symbol ON type_refs(symbol_id);
 CREATE INDEX IF NOT EXISTS idx_type_refs_ref ON type_refs(referenced_symbol_id);
 CREATE INDEX IF NOT EXISTS idx_co_changes_a ON co_changes(file_path_a);
 CREATE INDEX IF NOT EXISTS idx_co_changes_b ON co_changes(file_path_b);
+CREATE INDEX IF NOT EXISTS idx_call_sites_file ON call_sites(file_id);
+CREATE INDEX IF NOT EXISTS idx_call_sites_callee ON call_sites(callee_name);
 
 -- FTS for symbol name search
 CREATE VIRTUAL TABLE IF NOT EXISTS symbols_fts USING fts5(name, signature, doc_comment, content=symbols, content_rowid=id);
@@ -114,6 +124,7 @@ export function clearDatabase(db: Database.Database): void {
   db.exec(`
     DELETE FROM calls;
     DELETE FROM type_refs;
+    DELETE FROM call_sites;
     DELETE FROM imports;
     DELETE FROM symbols;
     DELETE FROM files;

@@ -21,6 +21,7 @@ program
   .description('Index the codebase — extract symbols, calls, patterns')
   .option('-r, --root <path>', 'Project root directory', '.')
   .option('--no-git', 'Skip git history analysis')
+  .option('--full', 'Force full re-index (skip incremental)')
   .option('--verbose', 'Show detailed output')
   .action(indexCommand);
 

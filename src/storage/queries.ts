@@ -120,6 +120,14 @@ export function insertParsedFile(db: Database.Database, file: ParsedFile): void 
       insertImport(db, fileId, imp);
     }
 
+    // Insert raw call sites for later resolution
+    const insertCallSite = db.prepare(
+      'INSERT INTO call_sites (file_id, caller_name, callee_name, line) VALUES (?, ?, ?, ?)',
+    );
+    for (const cs of file.callSites) {
+      insertCallSite.run(fileId, cs.callerName, cs.calleeName, cs.line);
+    }
+
     return { fileId, symbolMap };
   });
 

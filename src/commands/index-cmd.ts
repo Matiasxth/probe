@@ -1,38 +1,56 @@
 import path from 'path';
+import fs from 'fs';
 import chalk from 'chalk';
-import { openDatabase, clearDatabase, setMeta } from '../storage/database.js';
+import { openDatabase, clearDatabase, setMeta, getMeta } from '../storage/database.js';
 import { parseProject, resolveCallGraph } from '../parser/index.js';
 import { analyzeGitHistory } from '../analysis/git-history.js';
 import { extractPatterns } from '../analysis/patterns.js';
 import { DEFAULT_CONFIG } from '../types.js';
 
-export async function indexCommand(opts: { root: string; git?: boolean; verbose?: boolean }): Promise<void> {
+export async function indexCommand(opts: { root: string; git?: boolean; verbose?: boolean; full?: boolean }): Promise<void> {
   const root = path.resolve(opts.root);
   const start = Date.now();
 
-  console.log(chalk.cyan('probe') + ' Indexing codebase...');
-  console.log(chalk.dim(`  Root: ${root}`));
-
   const db = openDatabase(root);
-  clearDatabase(db);
+
+  // Determine if incremental is possible
+  const hasExistingIndex = getMeta(db, 'indexed_at') !== undefined;
+  const incremental = hasExistingIndex && !opts.full;
+
+  if (incremental) {
+    console.log(chalk.cyan('probe') + ' Updating index (incremental)...');
+    // Clear derived data — will be recomputed
+    db.exec('DELETE FROM calls; DELETE FROM co_changes; DELETE FROM patterns;');
+  } else {
+    console.log(chalk.cyan('probe') + ' Indexing codebase...');
+    clearDatabase(db);
+  }
+  console.log(chalk.dim(`  Root: ${root}`));
 
   const config = DEFAULT_CONFIG;
 
-  // Phase 1: Parse all files
+  // Phase 1: Parse files
   console.log(chalk.dim('\n  Parsing files...'));
-  const { files, symbols, errors } = await parseProject(root, db, config, (p) => {
+  const { files, symbols, skipped, errors } = await parseProject(root, db, config, (p) => {
     if (opts.verbose) {
       process.stdout.write(`\r  [${p.current}/${p.total}] ${p.file.slice(0, 60).padEnd(60)}`);
     }
-  });
+  }, incremental);
   if (opts.verbose) process.stdout.write('\r' + ' '.repeat(80) + '\r');
 
-  console.log(`  ${chalk.green('✓')} ${files} files, ${symbols} symbols`);
+  const parsedCount = files - skipped;
+  if (incremental && skipped > 0) {
+    console.log(`  ${chalk.green('✓')} ${files} files (${skipped} unchanged, ${parsedCount} parsed), ${symbols} symbols`);
+  } else {
+    console.log(`  ${chalk.green('✓')} ${files} files, ${symbols} symbols`);
+  }
 
-  if (errors.length > 0 && opts.verbose) {
-    console.log(chalk.yellow(`  ${errors.length} parse errors:`));
-    for (const err of errors.slice(0, 5)) {
-      console.log(chalk.dim(`    ${err}`));
+  if (errors.length > 0) {
+    if (opts.verbose) {
+      console.log(chalk.yellow(`  ${errors.length} parse errors:`));
+      for (const err of errors.slice(0, 5)) console.log(chalk.dim(`    ${err}`));
+    } else {
+      console.log(chalk.dim(`  ${errors.length} parse errors (use --verbose to see)`));
     }
   }
 

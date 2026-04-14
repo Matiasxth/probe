@@ -55,7 +55,8 @@
     "ignore": "^7.0.5",
     "simple-git": "^3.27.0",
     "tree-sitter-wasms": "^0.1.13",
-    "web-tree-sitter": "^0.24.7"
+    "web-tree-sitter": "^0.24.7",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
