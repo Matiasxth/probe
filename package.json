@@ -1,6 +1,6 @@
 {
   "name": "probe-code",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Codebase intelligence for AI agents. Index your code at function-level, query what matters, know what breaks.",
   "type": "module",
   "bin": {
