@@ -304,7 +304,12 @@ export function resolveCallGraph(db: Database.Database, root?: string): number {
       const fileSymbols = fileSymbolMap.get(cs.file_id);
       if (!fileSymbols) continue;
 
-      const callerId = fileSymbols.get(cs.caller_name);
+      // Try full name (e.g., "Hono.dispatch") then just method name (e.g., "dispatch")
+      let callerId = fileSymbols.get(cs.caller_name);
+      if (!callerId && cs.caller_name.includes('.')) {
+        const methodName = cs.caller_name.split('.').pop()!;
+        callerId = fileSymbols.get(methodName);
+      }
       if (!callerId) continue;
 
       // Resolve callee: check in order:

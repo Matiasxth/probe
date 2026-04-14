@@ -17,12 +17,12 @@ const SYNONYM_CLUSTERS: string[][] = [
   ['role', 'permission', 'privilege', 'access', 'rbac', 'acl'],
   ['authorize', 'authz', 'checkpermission', 'canaccess', 'isallowed'],
 
-  // CRUD operations
-  ['create', 'add', 'insert', 'new', 'register', 'post'],
-  ['read', 'get', 'fetch', 'find', 'query', 'lookup', 'retrieve', 'load', 'select'],
-  ['update', 'edit', 'modify', 'patch', 'change', 'set', 'put'],
-  ['delete', 'remove', 'destroy', 'drop', 'erase', 'purge', 'unlink'],
-  ['list', 'getall', 'findall', 'browse', 'index', 'enumerate'],
+  // CRUD operations (tighter clusters — avoid generic terms like get/set/new)
+  ['create', 'insert'],
+  ['fetch', 'retrieve', 'lookup', 'load'],
+  ['update', 'modify', 'patch'],
+  ['delete', 'remove', 'destroy', 'purge'],
+  ['findall', 'listall', 'getall'],
 
   // Data persistence
   ['save', 'persist', 'store', 'write', 'commit', 'flush'],
@@ -34,12 +34,12 @@ const SYNONYM_CLUSTERS: string[][] = [
 
   // API & HTTP
   ['endpoint', 'route', 'handler', 'controller', 'action'],
-  ['request', 'req', 'input', 'payload', 'body'],
-  ['response', 'res', 'reply', 'output'],
-  ['middleware', 'interceptor', 'filter', 'guard', 'hook'],
-  ['validate', 'validation', 'check', 'verify', 'sanitize', 'parse'],
-  ['serialize', 'marshal', 'encode', 'format', 'transform', 'convert'],
-  ['deserialize', 'unmarshal', 'decode', 'parse'],
+  ['request', 'payload', 'body'],
+  ['response', 'reply'],
+  ['middleware', 'interceptor', 'guard'],
+  ['validate', 'validation', 'sanitize'],
+  ['serialize', 'marshal', 'encode'],
+  ['deserialize', 'unmarshal', 'decode'],
 
   // Error handling
   ['error', 'exception', 'failure', 'fault', 'err'],
@@ -56,21 +56,18 @@ const SYNONYM_CLUSTERS: string[][] = [
   ['schedule', 'cron', 'timer', 'interval', 'periodic'],
 
   // Testing
-  ['test', 'spec', 'assert', 'expect', 'verify', 'check'],
-  ['mock', 'stub', 'fake', 'spy', 'double', 'fixture'],
-  ['setup', 'beforeeach', 'beforeall', 'init', 'bootstrap'],
-  ['teardown', 'aftereach', 'afterall', 'cleanup', 'dispose'],
+  ['test', 'spec'],
+  ['mock', 'stub', 'fake', 'fixture'],
+  ['setup', 'beforeeach', 'beforeall', 'bootstrap'],
+  ['teardown', 'aftereach', 'afterall', 'cleanup'],
 
   // File & IO
-  ['file', 'path', 'directory', 'folder', 'dir'],
-  ['read', 'open', 'load', 'import', 'ingest'],
-  ['write', 'save', 'export', 'output', 'dump'],
-  ['upload', 'attach', 'multipart', 'blob', 'binary'],
-  ['download', 'export', 'extract'],
+  ['file', 'directory', 'folder'],
+  ['upload', 'attach', 'multipart'],
 
   // Config & environment
-  ['config', 'configuration', 'settings', 'options', 'preferences', 'env'],
-  ['secret', 'credential', 'apikey', 'password', 'token'],
+  ['config', 'configuration', 'settings'],
+  ['credential', 'apikey'],
 
   // UI/Frontend
   ['component', 'widget', 'element', 'view'],

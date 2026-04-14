@@ -221,7 +221,9 @@ export function extractTypeScript(tree: Parser.Tree, source: string, isTsx: bool
       case 'public_field_definition': {
         const nameNode = node.childForFieldName('name');
         if (nameNode && currentClass) {
-          const name = nameNode.text;
+          const rawName = nameNode.text;
+          // Strip # from private methods for call graph matching
+          const name = rawName.startsWith('#') ? rawName.slice(1) : rawName;
           const kind: SymbolKind = node.type === 'method_definition' ? 'method' : 'variable';
           symbols.push({
             name,
@@ -375,14 +377,34 @@ export function extractTypeScript(tree: Parser.Tree, source: string, isTsx: bool
           if (funcNode) {
             let calleeName: string;
             if (funcNode.type === 'member_expression') {
-              // obj.method() — extract method name
+              // obj.method() or this.#method()
               const prop = funcNode.childForFieldName('property');
               calleeName = prop?.text ?? funcNode.text;
+              // Strip # prefix from private methods for matching
+              if (calleeName.startsWith('#')) calleeName = calleeName.slice(1);
             } else {
               calleeName = funcNode.text;
             }
             // Skip built-ins and very long names
             if (calleeName.length < 100 && !calleeName.includes('(')) {
+              callSites.push({
+                callerName: currentFunction,
+                calleeName,
+                line: node.startPosition.row + 1,
+              });
+            }
+          }
+        }
+        break;
+      }
+
+      // === Constructor calls: new Foo() ===
+      case 'new_expression': {
+        if (currentFunction) {
+          const ctorNode = node.childForFieldName('constructor');
+          if (ctorNode) {
+            const calleeName = ctorNode.text;
+            if (calleeName.length < 100 && /^[A-Z]/.test(calleeName)) {
               callSites.push({
                 callerName: currentFunction,
                 calleeName,
