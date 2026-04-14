@@ -1,7 +1,7 @@
 import type Parser from 'web-tree-sitter';
 import type { ParsedSymbol, ParsedImport, ParsedCallSite, SymbolKind } from '../../types.js';
 
-export function extractTypeScript(tree: Parser.Tree, source: string): {
+export function extractTypeScript(tree: Parser.Tree, source: string, isTsx: boolean = false): {
   symbols: ParsedSymbol[];
   imports: ParsedImport[];
   callSites: ParsedCallSite[];
@@ -28,6 +28,66 @@ export function extractTypeScript(tree: Parser.Tree, source: string): {
       }
     }
     return null;
+  }
+
+  function getDecorators(node: Parser.SyntaxNode): string[] {
+    const decorators: string[] = [];
+    // In tree-sitter-typescript, decorators are children of the node itself
+    for (const child of node.children) {
+      if (child.type === 'decorator') {
+        // Extract decorator text, truncate long ones
+        const text = child.text.length > 80 ? child.text.slice(0, 80) + '...' : child.text;
+        decorators.push(text);
+      }
+    }
+    // Also check parent (for decorated classes/methods in some AST variants)
+    const parent = node.parent;
+    if (parent) {
+      for (const child of parent.children) {
+        if (child.type === 'decorator' && child.endPosition.row < node.startPosition.row) {
+          const text = child.text.length > 80 ? child.text.slice(0, 80) + '...' : child.text;
+          if (!decorators.includes(text)) decorators.push(text);
+        }
+      }
+    }
+    return decorators;
+  }
+
+  function detectTags(node: Parser.SyntaxNode, name: string, kind: string, isTsxFile: boolean): string[] {
+    const tags: string[] = [];
+
+    // Decorators → tags
+    const decorators = getDecorators(node);
+    tags.push(...decorators);
+
+    // React component detection: PascalCase name + JSX in body or FC type
+    if (kind === 'function' && name[0] === name[0].toUpperCase() && name[0] !== name[0].toLowerCase()) {
+      // Check for FC/FunctionComponent type annotation
+      const typeNode = node.childForFieldName('type');
+      if (typeNode) {
+        const typeText = typeNode.text;
+        if (typeText.includes('FC') || typeText.includes('FunctionComponent') || typeText.includes('ReactNode') || typeText.includes('JSX.Element')) {
+          tags.push('component');
+        }
+      }
+      // Check for JSX in body (for .tsx files)
+      if (isTsxFile && !tags.includes('component')) {
+        const hasJsx = containsJsx(node);
+        if (hasJsx) tags.push('component');
+      }
+    }
+
+    return tags;
+  }
+
+  function containsJsx(node: Parser.SyntaxNode): boolean {
+    if (node.type === 'jsx_element' || node.type === 'jsx_self_closing_element' || node.type === 'jsx_fragment') {
+      return true;
+    }
+    for (const child of node.children) {
+      if (containsJsx(child)) return true;
+    }
+    return false;
   }
 
   function isExported(node: Parser.SyntaxNode): boolean {
@@ -73,6 +133,7 @@ export function extractTypeScript(tree: Parser.Tree, source: string): {
         const nameNode = node.childForFieldName('name');
         if (nameNode) {
           const name = nameNode.text;
+          const tags = detectTags(node, name, 'function', isTsx);
           symbols.push({
             name,
             kind: 'function',
@@ -83,6 +144,7 @@ export function extractTypeScript(tree: Parser.Tree, source: string): {
             isExported: isExported(node),
             isDefault: isDefaultExport(node),
             parentName: currentClass,
+            tags: tags.length > 0 ? tags : undefined,
           });
           const prevFunc = currentFunction;
           currentFunction = name;
@@ -103,6 +165,8 @@ export function extractTypeScript(tree: Parser.Tree, source: string): {
           if (nameNode && valueNode && (valueNode.type === 'arrow_function' || valueNode.type === 'function_expression')) {
             const name = nameNode.text;
             const exported = isExported(node);
+            // Check type annotation for FC detection
+            const tags = detectTags(declarator, name, 'function', isTsx);
             symbols.push({
               name,
               kind: 'function',
@@ -113,6 +177,7 @@ export function extractTypeScript(tree: Parser.Tree, source: string): {
               isExported: exported,
               isDefault: isDefaultExport(node),
               parentName: currentClass,
+              tags: tags.length > 0 ? tags : undefined,
             });
             const prevFunc = currentFunction;
             currentFunction = name;
@@ -129,6 +194,7 @@ export function extractTypeScript(tree: Parser.Tree, source: string): {
         const nameNode = node.childForFieldName('name');
         if (nameNode) {
           const name = nameNode.text;
+          const tags = detectTags(node, name, 'class', isTsx);
           symbols.push({
             name,
             kind: 'class',
@@ -139,6 +205,7 @@ export function extractTypeScript(tree: Parser.Tree, source: string): {
             isExported: isExported(node),
             isDefault: isDefaultExport(node),
             parentName: null,
+            tags: tags.length > 0 ? tags : undefined,
           });
           const prevClass = currentClass;
           currentClass = name;

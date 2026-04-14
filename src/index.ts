@@ -12,6 +12,7 @@ export type {
 } from './types.js';
 
 export { DEFAULT_CONFIG } from './types.js';
+export { loadConfig, writeDefaultConfig } from './config.js';
 export { openDatabase, clearDatabase, getMeta, setMeta } from './storage/database.js';
 export { queryCodebase } from './engine/query.js';
 export { analyzeImpact } from './engine/impact.js';

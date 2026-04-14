@@ -5,6 +5,7 @@ import { impactCommand } from '../src/commands/impact-cmd.js';
 import { patternsCommand } from '../src/commands/patterns-cmd.js';
 import { serveCommand } from '../src/commands/serve-cmd.js';
 import { statsCommand } from '../src/commands/stats-cmd.js';
+import { initConfigCommand } from '../src/commands/init-config-cmd.js';
 
 declare const globalThis: { __PROBE_VERSION__: string };
 const version = globalThis.__PROBE_VERSION__ ?? '0.0.0-dev';
@@ -60,5 +61,11 @@ program
   .description('Start MCP server for AI agent integration')
   .option('-r, --root <path>', 'Project root directory', '.')
   .action(serveCommand);
+
+program
+  .command('init')
+  .description('Create .probe/config.json with default settings')
+  .option('-r, --root <path>', 'Project root directory', '.')
+  .action(initConfigCommand);
 
 program.parse();

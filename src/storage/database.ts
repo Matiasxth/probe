@@ -22,7 +22,8 @@ CREATE TABLE IF NOT EXISTS symbols (
   doc_comment TEXT,
   is_exported INTEGER NOT NULL DEFAULT 0,
   is_default INTEGER NOT NULL DEFAULT 0,
-  parent_symbol_id INTEGER REFERENCES symbols(id) ON DELETE CASCADE
+  parent_symbol_id INTEGER REFERENCES symbols(id) ON DELETE CASCADE,
+  tags TEXT NOT NULL DEFAULT '[]'
 );
 
 CREATE TABLE IF NOT EXISTS imports (
@@ -96,19 +97,19 @@ CREATE INDEX IF NOT EXISTS idx_call_sites_file ON call_sites(file_id);
 CREATE INDEX IF NOT EXISTS idx_call_sites_callee ON call_sites(callee_name);
 
 -- FTS for symbol name search
-CREATE VIRTUAL TABLE IF NOT EXISTS symbols_fts USING fts5(name, signature, doc_comment, content=symbols, content_rowid=id);
+CREATE VIRTUAL TABLE IF NOT EXISTS symbols_fts USING fts5(name, signature, doc_comment, tags, content=symbols, content_rowid=id);
 
 CREATE TRIGGER IF NOT EXISTS symbols_ai AFTER INSERT ON symbols BEGIN
-  INSERT INTO symbols_fts(rowid, name, signature, doc_comment) VALUES (new.id, new.name, new.signature, new.doc_comment);
+  INSERT INTO symbols_fts(rowid, name, signature, doc_comment, tags) VALUES (new.id, new.name, new.signature, new.doc_comment, new.tags);
 END;
 
 CREATE TRIGGER IF NOT EXISTS symbols_ad AFTER DELETE ON symbols BEGIN
-  INSERT INTO symbols_fts(symbols_fts, rowid, name, signature, doc_comment) VALUES('delete', old.id, old.name, old.signature, old.doc_comment);
+  INSERT INTO symbols_fts(symbols_fts, rowid, name, signature, doc_comment, tags) VALUES('delete', old.id, old.name, old.signature, old.doc_comment, old.tags);
 END;
 
 CREATE TRIGGER IF NOT EXISTS symbols_au AFTER UPDATE ON symbols BEGIN
-  INSERT INTO symbols_fts(symbols_fts, rowid, name, signature, doc_comment) VALUES('delete', old.id, old.name, old.signature, old.doc_comment);
-  INSERT INTO symbols_fts(rowid, name, signature, doc_comment) VALUES (new.id, new.name, new.signature, new.doc_comment);
+  INSERT INTO symbols_fts(symbols_fts, rowid, name, signature, doc_comment, tags) VALUES('delete', old.id, old.name, old.signature, old.doc_comment, old.tags);
+  INSERT INTO symbols_fts(rowid, name, signature, doc_comment, tags) VALUES (new.id, new.name, new.signature, new.doc_comment, new.tags);
 END;
 `;
 

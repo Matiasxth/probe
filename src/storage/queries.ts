@@ -17,8 +17,8 @@ export function insertSymbol(
   parentSymbolId: number | null,
 ): number {
   const result = db.prepare(`
-    INSERT INTO symbols (file_id, name, kind, line_start, line_end, signature, doc_comment, is_exported, is_default, parent_symbol_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO symbols (file_id, name, kind, line_start, line_end, signature, doc_comment, is_exported, is_default, parent_symbol_id, tags)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     fileId,
     symbol.name,
@@ -30,6 +30,7 @@ export function insertSymbol(
     symbol.isExported ? 1 : 0,
     symbol.isDefault ? 1 : 0,
     parentSymbolId,
+    JSON.stringify(symbol.tags ?? []),
   );
   return result.lastInsertRowid as number;
 }

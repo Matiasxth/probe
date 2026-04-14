@@ -121,6 +121,7 @@ export interface ParsedSymbol {
   isExported: boolean;
   isDefault: boolean;
   parentName: string | null;
+  tags?: string[];
 }
 
 export interface ParsedImport {

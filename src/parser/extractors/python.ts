@@ -14,8 +14,14 @@ export function extractPython(tree: Parser.Tree, source: string): {
   let currentFunction: string | null = null;
   let currentClass: string | null = null;
 
-  // Python: top-level and class-level defs are "exported" by default
-  // __all__ would restrict this but we treat all top-level as exported
+  // Pre-pass: extract __all__ if defined
+  const allExports = parseAllExports(tree.rootNode);
+  const hasAll = allExports !== null;
+
+  function isSymbolExported(name: string): boolean {
+    if (hasAll) return allExports!.has(name);
+    return !name.startsWith('_');
+  }
 
   function getDocstring(node: Parser.SyntaxNode): string | null {
     const body = node.childForFieldName('body');
@@ -73,7 +79,7 @@ export function extractPython(tree: Parser.Tree, source: string): {
             lineEnd: node.endPosition.row + 1,
             signature: sig.length > 200 ? sig.slice(0, 200) + '...' : sig,
             docComment: getDocstring(node),
-            isExported: !name.startsWith('_') && (isTopLevel || isMethod),
+            isExported: isSymbolExported(name) && (isTopLevel || isMethod),
             isDefault: false,
             parentName: currentClass,
           });
@@ -101,7 +107,7 @@ export function extractPython(tree: Parser.Tree, source: string): {
             lineEnd: node.endPosition.row + 1,
             signature: sig,
             docComment: getDocstring(node),
-            isExported: !name.startsWith('_'),
+            isExported: isSymbolExported(name),
             isDefault: false,
             parentName: null,
           });
@@ -202,7 +208,7 @@ export function extractPython(tree: Parser.Tree, source: string): {
                   lineEnd: node.endPosition.row + 1,
                   signature: lines[node.startPosition.row]?.trim() ?? '',
                   docComment: null,
-                  isExported: !left.text.startsWith('_'),
+                  isExported: isSymbolExported(left.text),
                   isDefault: false,
                   parentName: null,
                 });
@@ -218,7 +224,7 @@ export function extractPython(tree: Parser.Tree, source: string): {
                 lineEnd: node.endPosition.row + 1,
                 signature: lineText.length > 200 ? lineText.slice(0, 200) + '...' : lineText,
                 docComment: null,
-                isExported: !left.text.startsWith('_'),
+                isExported: isSymbolExported(left.text),
                 isDefault: false,
                 parentName: currentClass,
               });
@@ -246,7 +252,7 @@ export function extractPython(tree: Parser.Tree, source: string): {
               lineEnd: node.endPosition.row + 1,
               signature: lineText.length > 200 ? lineText.slice(0, 200) + '...' : lineText,
               docComment: null,
-              isExported: !left.text.startsWith('_'),
+              isExported: isSymbolExported(left.text),
               isDefault: false,
               parentName: currentClass,
             });
@@ -267,4 +273,33 @@ export function extractPython(tree: Parser.Tree, source: string): {
 
   walk(tree.rootNode);
   return { symbols, imports, callSites };
+}
+
+/**
+ * Parse __all__ = ['Foo', 'Bar'] from module root.
+ * Returns null if __all__ is not defined (keep default behavior).
+ */
+function parseAllExports(rootNode: Parser.SyntaxNode): Set<string> | null {
+  for (const child of rootNode.namedChildren) {
+    if (child.type !== 'expression_statement') continue;
+    const assign = child.namedChildren[0];
+    if (assign?.type !== 'assignment') continue;
+
+    const left = assign.childForFieldName('left');
+    if (left?.type !== 'identifier' || left.text !== '__all__') continue;
+
+    const right = assign.childForFieldName('right');
+    if (!right || right.type !== 'list') continue;
+
+    const names = new Set<string>();
+    for (const item of right.namedChildren) {
+      if (item.type === 'string') {
+        // Strip quotes: 'Foo' or "Foo" → Foo
+        const text = item.text.replace(/^['"]|['"]$/g, '');
+        if (text) names.add(text);
+      }
+    }
+    return names.size > 0 ? names : null;
+  }
+  return null;
 }

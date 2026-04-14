@@ -206,7 +206,7 @@ async function parseFile(absPath: string, relPath: string): Promise<ParsedFile |
   switch (language) {
     case 'typescript':
     case 'javascript':
-      extracted = extractTypeScript(tree, source);
+      extracted = extractTypeScript(tree, source, isTsx);
       break;
     case 'python':
       extracted = extractPython(tree, source);
@@ -233,8 +233,11 @@ async function parseFile(absPath: string, relPath: string): Promise<ParsedFile |
  * combined with the import graph to resolve callee identity.
  */
 export function resolveCallGraph(db: Database.Database, root?: string): number {
-  // Load path aliases for TS resolution
-  if (root) loadPathAliases(root);
+  // Load path aliases for TS resolution and Go module path
+  if (root) {
+    loadPathAliases(root);
+    loadGoModulePath(root);
+  }
 
   // 1. Build symbol lookup: name → [{id, fileId, isExported, filePath}]
   const allSymbols = db.prepare(`
@@ -358,8 +361,10 @@ export function resolveCallGraph(db: Database.Database, root?: string): number {
   return resolvedCount;
 }
 
-// Cache for tsconfig path aliases
+// Cache for tsconfig path aliases and Go module path
 let pathAliases: Array<{ prefix: string; targets: string[] }> | null = null;
+let goModulePath: string | null = null;
+let goModuleLoaded = false;
 
 function loadPathAliases(root: string): void {
   if (pathAliases !== null) return;
@@ -391,6 +396,24 @@ function loadPathAliases(root: string): void {
   }
 }
 
+function loadGoModulePath(root: string): void {
+  if (goModuleLoaded) return;
+  goModuleLoaded = true;
+
+  const goModPath = path.join(root, 'go.mod');
+  if (!fs.existsSync(goModPath)) return;
+
+  try {
+    const content = fs.readFileSync(goModPath, 'utf-8');
+    const match = content.match(/^module\s+(\S+)/m);
+    if (match) {
+      goModulePath = match[1];
+    }
+  } catch {
+    // Ignore
+  }
+}
+
 function resolveImportPath(fromFile: string, importSource: string): string {
   // Relative imports
   if (importSource.startsWith('.')) {
@@ -411,6 +434,11 @@ function resolveImportPath(fromFile: string, importSource: string): string {
         return (alias.targets[0] + rest).replace(/\\/g, '/');
       }
     }
+  }
+
+  // Go module resolution: strip module prefix to get relative path
+  if (goModulePath && importSource.startsWith(goModulePath + '/')) {
+    return importSource.slice(goModulePath.length + 1);
   }
 
   // Package imports — return as-is

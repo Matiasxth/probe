@@ -6,7 +6,7 @@ import { parseProject, resolveCallGraph } from '../parser/index.js';
 import { resolveMethodCalls } from '../parser/type-resolver.js';
 import { analyzeGitHistory } from '../analysis/git-history.js';
 import { extractPatterns } from '../analysis/patterns.js';
-import { DEFAULT_CONFIG } from '../types.js';
+import { loadConfig } from '../config.js';
 
 export async function indexCommand(opts: { root: string; git?: boolean; verbose?: boolean; full?: boolean }): Promise<void> {
   const root = path.resolve(opts.root);
@@ -28,7 +28,7 @@ export async function indexCommand(opts: { root: string; git?: boolean; verbose?
   }
   console.log(chalk.dim(`  Root: ${root}`));
 
-  const config = DEFAULT_CONFIG;
+  const config = loadConfig(root);
 
   // Phase 1: Parse files
   console.log(chalk.dim('\n  Parsing files...'));
