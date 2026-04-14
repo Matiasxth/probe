@@ -1,0 +1,68 @@
+{
+  "name": "probe-code",
+  "version": "0.1.0",
+  "description": "Codebase intelligence for AI agents. Index your code at function-level, query what matters, know what breaks.",
+  "type": "module",
+  "bin": {
+    "probe": "./dist/bin/probe.js",
+    "probe-mcp": "./dist/bin/probe-mcp.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsx bin/probe.ts",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "lint": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "codebase",
+    "ai",
+    "agent",
+    "claude",
+    "mcp",
+    "model-context-protocol",
+    "static-analysis",
+    "call-graph",
+    "dependency",
+    "tree-sitter",
+    "code-intelligence"
+  ],
+  "author": "matiasxth",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/matiasxth/probe"
+  },
+  "homepage": "https://github.com/matiasxth/probe#readme",
+  "bugs": {
+    "url": "https://github.com/matiasxth/probe/issues"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "better-sqlite3": "^11.9.1",
+    "chalk": "^5.4.1",
+    "commander": "^13.1.0",
+    "fast-glob": "^3.3.3",
+    "ignore": "^7.0.5",
+    "simple-git": "^3.27.0",
+    "tree-sitter-wasms": "^0.1.13",
+    "web-tree-sitter": "^0.24.7"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.15.3",
+    "tsup": "^8.4.0",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3",
+    "vitest": "^3.1.3"
+  }
+}
