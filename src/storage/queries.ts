@@ -124,10 +124,20 @@ export function insertParsedFile(db: Database.Database, file: ParsedFile): void 
 
     // Insert raw call sites for later resolution
     const insertCallSite = db.prepare(
-      'INSERT INTO call_sites (file_id, caller_name, callee_name, line) VALUES (?, ?, ?, ?)',
+      'INSERT INTO call_sites (file_id, caller_name, callee_name, receiver_name, line) VALUES (?, ?, ?, ?, ?)',
     );
     for (const cs of file.callSites) {
-      insertCallSite.run(fileId, cs.callerName, cs.calleeName, cs.line);
+      insertCallSite.run(fileId, cs.callerName, cs.calleeName, cs.receiverName ?? null, cs.line);
+    }
+
+    // Insert type hints
+    if (file.typeHints && file.typeHints.length > 0) {
+      const insertHint = db.prepare(
+        'INSERT INTO type_hints (file_id, scope, variable_name, type_name, source) VALUES (?, ?, ?, ?, ?)',
+      );
+      for (const th of file.typeHints) {
+        insertHint.run(fileId, th.scope, th.variableName, th.typeName, th.source);
+      }
     }
 
     return { fileId, symbolMap };

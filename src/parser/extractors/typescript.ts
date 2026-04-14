@@ -1,14 +1,16 @@
 import type Parser from 'web-tree-sitter';
-import type { ParsedSymbol, ParsedImport, ParsedCallSite, SymbolKind } from '../../types.js';
+import type { ParsedSymbol, ParsedImport, ParsedCallSite, ParsedTypeHint, SymbolKind } from '../../types.js';
 
 export function extractTypeScript(tree: Parser.Tree, source: string, isTsx: boolean = false): {
   symbols: ParsedSymbol[];
   imports: ParsedImport[];
   callSites: ParsedCallSite[];
+  typeHints: ParsedTypeHint[];
 } {
   const symbols: ParsedSymbol[] = [];
   const imports: ParsedImport[] = [];
   const callSites: ParsedCallSite[] = [];
+  const typeHints: ParsedTypeHint[] = [];
   const lines = source.split('\n');
 
   function getDocComment(node: Parser.SyntaxNode): string | null {
@@ -126,6 +128,55 @@ export function extractTypeScript(tree: Parser.Tree, source: string, isTsx: bool
   let currentFunction: string | null = null;
   let currentClass: string | null = null;
 
+  function extractParamTypeHints(funcNode: Parser.SyntaxNode, funcName: string): void {
+    const params = funcNode.childForFieldName('parameters');
+    if (!params) return;
+    for (const param of params.namedChildren) {
+      if (param.type === 'required_parameter' || param.type === 'optional_parameter') {
+        const paramName = param.childForFieldName('pattern') ?? param.childForFieldName('name');
+        const typeNode = param.childForFieldName('type');
+        if (paramName?.type === 'identifier' && typeNode) {
+          const typeName = typeNode.text.replace(/\s+/g, ' ').split('<')[0].split('|')[0].trim();
+          if (typeName && typeName.length < 50 && /^[A-Z]/.test(typeName)) {
+            typeHints.push({
+              scope: funcName,
+              variableName: paramName.text,
+              typeName,
+              source: 'parameter',
+            });
+          }
+        }
+      }
+    }
+  }
+
+  function extractVarTypeHint(declarator: Parser.SyntaxNode, scope: string): void {
+    const nameNode = declarator.childForFieldName('name');
+    const typeNode = declarator.childForFieldName('type');
+    const valueNode = declarator.childForFieldName('value');
+
+    if (nameNode?.type !== 'identifier') return;
+
+    // const user: User = ...
+    if (typeNode) {
+      const typeName = typeNode.text.replace(/\s+/g, ' ').split('<')[0].split('|')[0].trim();
+      if (typeName && typeName.length < 50 && /^[A-Z]/.test(typeName)) {
+        typeHints.push({ scope, variableName: nameNode.text, typeName, source: 'annotation' });
+      }
+    }
+
+    // const user = new User()
+    if (valueNode?.type === 'new_expression') {
+      const ctor = valueNode.childForFieldName('constructor');
+      if (ctor) {
+        const typeName = ctor.text.split('<')[0];
+        if (typeName.length < 50 && /^[A-Z]/.test(typeName)) {
+          typeHints.push({ scope, variableName: nameNode.text, typeName, source: 'constructor' });
+        }
+      }
+    }
+  }
+
   function walk(node: Parser.SyntaxNode): void {
     switch (node.type) {
       // === Functions ===
@@ -148,6 +199,8 @@ export function extractTypeScript(tree: Parser.Tree, source: string, isTsx: bool
           });
           const prevFunc = currentFunction;
           currentFunction = name;
+          // Extract parameter type hints
+          extractParamTypeHints(node, name);
           walkChildren(node);
           currentFunction = prevFunc;
           return;
@@ -219,6 +272,10 @@ export function extractTypeScript(tree: Parser.Tree, source: string, isTsx: bool
               }
             }
           }
+
+          // Extract type hints from variable declarations
+          const scope = currentFunction ?? '__module__';
+          extractVarTypeHint(declarator, scope);
         }
         break;
       }
@@ -417,20 +474,24 @@ export function extractTypeScript(tree: Parser.Tree, source: string, isTsx: bool
           const funcNode = node.childForFieldName('function');
           if (funcNode) {
             let calleeName: string;
+            let receiverName: string | undefined;
             if (funcNode.type === 'member_expression') {
-              // obj.method() or this.#method()
+              const obj = funcNode.childForFieldName('object');
               const prop = funcNode.childForFieldName('property');
               calleeName = prop?.text ?? funcNode.text;
-              // Strip # prefix from private methods for matching
               if (calleeName.startsWith('#')) calleeName = calleeName.slice(1);
+              // Capture receiver for type-aware resolution
+              if (obj && obj.type === 'identifier' && obj.text !== 'this' && obj.text !== 'super') {
+                receiverName = obj.text;
+              }
             } else {
               calleeName = funcNode.text;
             }
-            // Skip built-ins and very long names
             if (calleeName.length < 100 && !calleeName.includes('(')) {
               callSites.push({
                 callerName: currentFunction,
                 calleeName,
+                ...(receiverName ? { receiverName } : {}),
                 line: node.startPosition.row + 1,
               });
             }
@@ -495,5 +556,5 @@ export function extractTypeScript(tree: Parser.Tree, source: string, isTsx: bool
   }
 
   walk(tree.rootNode);
-  return { symbols, imports, callSites };
+  return { symbols, imports, callSites, typeHints };
 }

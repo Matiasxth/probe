@@ -308,6 +308,41 @@ export function resolveCallGraph(db: Database.Database, root?: string): number {
     }
   }
 
+  // 3b. Build re-export graph for barrel exports (export * from './sub')
+  // Maps: source file path → [re-exported source paths]
+  const reExportGraph = new Map<string, string[]>();
+  const allNamespaceReExports = db.prepare(`
+    SELECT i.source_path, f.path as file_path
+    FROM imports i
+    JOIN files f ON f.id = i.file_id
+    WHERE i.is_namespace = 1 AND i.imported_names = '[]'
+  `).all() as Array<{ source_path: string; file_path: string }>;
+
+  for (const re of allNamespaceReExports) {
+    const resolvedTarget = resolveImportPath(re.file_path, re.source_path);
+    const existing = reExportGraph.get(re.file_path) ?? [];
+    existing.push(resolvedTarget);
+    reExportGraph.set(re.file_path, existing);
+  }
+
+  // Follow re-export chains: if A re-exports from B, and B re-exports from C,
+  // then symbols from C are also available via A
+  function getReExportChain(filePath: string, visited = new Set<string>()): string[] {
+    if (visited.has(filePath)) return []; // cycle
+    visited.add(filePath);
+    const direct = reExportGraph.get(filePath) ?? [];
+    const all = [...direct];
+    for (const d of direct) {
+      // Also check files matching this path
+      for (const [fp, targets] of reExportGraph) {
+        if (fp.replace(/\.[^.]+$/, '') === d || fp.startsWith(d + '/')) {
+          all.push(...getReExportChain(fp, visited));
+        }
+      }
+    }
+    return all;
+  }
+
   // 4. Read all raw call sites from staging table
   const rawCallSites = db.prepare(`
     SELECT cs.file_id, cs.caller_name, cs.callee_name, cs.line
@@ -356,12 +391,28 @@ export function resolveCallGraph(db: Database.Database, root?: string): number {
 
             const candidates = nameIndex.get(targetName);
             if (candidates) {
-              const match = candidates.find((c) =>
+              // Direct match in source file
+              let match = candidates.find((c) =>
                 c.filePath === sourcePath ||
                 c.filePath.startsWith(sourcePath + '/') ||
                 c.filePath.replace(/\.[^.]+$/, '') === sourcePath ||
                 c.filePath.replace(/\.[^.]+$/, '').endsWith('/' + sourcePath.split('/').pop()),
               );
+
+              // If not found, check re-export chain from the source file
+              if (!match) {
+                const reExports = getReExportChain(sourcePath);
+                for (const reTarget of reExports) {
+                  match = candidates.find((c) =>
+                    c.filePath === reTarget ||
+                    c.filePath.startsWith(reTarget + '/') ||
+                    c.filePath.replace(/\.[^.]+$/, '') === reTarget ||
+                    c.filePath.replace(/\.[^.]+$/, '').endsWith('/' + reTarget.split('/').pop()),
+                  );
+                  if (match) break;
+                }
+              }
+
               if (match) calleeId = match.id;
             }
           }

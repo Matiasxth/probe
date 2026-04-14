@@ -74,8 +74,21 @@ CREATE TABLE IF NOT EXISTS call_sites (
   file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
   caller_name TEXT NOT NULL,
   callee_name TEXT NOT NULL,
+  receiver_name TEXT,
   line INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS type_hints (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+  scope TEXT NOT NULL,
+  variable_name TEXT NOT NULL,
+  type_name TEXT NOT NULL,
+  source TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_type_hints_file ON type_hints(file_id);
+CREATE INDEX IF NOT EXISTS idx_type_hints_scope ON type_hints(scope);
 
 CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
@@ -165,6 +178,7 @@ export function clearDatabase(db: Database.Database): void {
     DELETE FROM calls;
     DELETE FROM type_refs;
     DELETE FROM call_sites;
+    DELETE FROM type_hints;
     DELETE FROM imports;
     DELETE FROM symbols;
     DELETE FROM files;

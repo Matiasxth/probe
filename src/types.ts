@@ -111,6 +111,7 @@ export interface ParsedFile {
   symbols: ParsedSymbol[];
   imports: ParsedImport[];
   callSites: ParsedCallSite[];
+  typeHints?: ParsedTypeHint[];
 }
 
 export interface ParsedSymbol {
@@ -134,9 +135,17 @@ export interface ParsedImport {
   isNamespace: boolean;
 }
 
+export interface ParsedTypeHint {
+  scope: string;         // function name or '__module__'
+  variableName: string;  // e.g., "user"
+  typeName: string;      // e.g., "User"
+  source: 'annotation' | 'constructor' | 'parameter' | 'return';
+}
+
 export interface ParsedCallSite {
   callerName: string;
   calleeName: string;
+  receiverName?: string;  // e.g., "user" from user.save()
   line: number;
 }
 
