@@ -5,6 +5,7 @@
   "type": "module",
   "bin": {
     "probe": "./dist/bin/probe.js",
+    "probe-code": "./dist/bin/probe.js",
     "probe-mcp": "./dist/bin/probe-mcp.js"
   },
   "main": "./dist/index.js",

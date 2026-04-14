@@ -19,10 +19,7 @@ export function startWatcher(root: string, db: Database.Database): { close: () =
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
   const changedFiles = new Set<string>();
 
-  const globs = [...SUPPORTED_EXTENSIONS].map((ext) => `**/*${ext}`);
-
-  const watcher = chokidar.watch(globs, {
-    cwd: absRoot,
+  const watcher = chokidar.watch(absRoot, {
     ignored: [
       '**/node_modules/**', '**/dist/**', '**/build/**', '**/.git/**',
       '**/.probe/**', '**/coverage/**', '**/__pycache__/**', '**/vendor/**',
@@ -30,7 +27,8 @@ export function startWatcher(root: string, db: Database.Database): { close: () =
     ],
     ignoreInitial: true,
     persistent: true,
-    awaitWriteFinish: { stabilityThreshold: 500 },
+    usePolling: true,
+    interval: 2000,
   });
 
   function scheduleReindex() {
@@ -70,18 +68,28 @@ export function startWatcher(root: string, db: Database.Database): { close: () =
     }, DEBOUNCE_MS);
   }
 
+  function isRelevantFile(filePath: string): boolean {
+    const ext = path.extname(filePath);
+    return SUPPORTED_EXTENSIONS.has(ext);
+  }
+
   watcher.on('change', (filePath) => {
-    changedFiles.add(filePath);
+    if (!isRelevantFile(filePath)) return;
+    const rel = path.relative(absRoot, filePath).replace(/\\/g, '/');
+    changedFiles.add(rel);
     scheduleReindex();
   });
 
   watcher.on('add', (filePath) => {
-    changedFiles.add(filePath);
+    if (!isRelevantFile(filePath)) return;
+    const rel = path.relative(absRoot, filePath).replace(/\\/g, '/');
+    changedFiles.add(rel);
     scheduleReindex();
   });
 
   watcher.on('unlink', (filePath) => {
-    const normalized = filePath.replace(/\\/g, '/');
+    if (!isRelevantFile(filePath)) return;
+    const normalized = path.relative(absRoot, filePath).replace(/\\/g, '/');
     const oldFile = db.prepare('SELECT id FROM files WHERE path = ?').get(normalized) as { id: number } | undefined;
     if (oldFile) {
       db.prepare('DELETE FROM files WHERE id = ?').run(oldFile.id);

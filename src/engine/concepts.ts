@@ -137,7 +137,9 @@ export function expandKeywords(keywords: string[]): string[] {
     }
   }
 
-  return [...expanded];
+  // Filter out very short synonyms that cause FTS false positives
+  // FTS matches substrings, so "sso" matches "iSSourceFile", "db" matches "db_url"
+  return [...expanded].filter((w) => w.length >= 4);
 }
 
 /**

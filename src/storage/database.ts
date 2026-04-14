@@ -125,9 +125,38 @@ export function openDatabase(root: string): Database.Database {
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
   db.pragma('synchronous = NORMAL');
+
+  // Migrate: add tags column if missing (pre-v0.2 DBs)
+  migrateSchema(db);
+
   db.exec(SCHEMA);
 
   return db;
+}
+
+function migrateSchema(db: Database.Database): void {
+  try {
+    // Check if symbols table exists and lacks tags column
+    const cols = db.pragma('table_info(symbols)') as Array<{ name: string }>;
+    if (cols.length > 0 && !cols.some((c) => c.name === 'tags')) {
+      db.exec("ALTER TABLE symbols ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'");
+      // Rebuild FTS to include tags — drop old triggers and FTS table
+      db.exec(`
+        DROP TRIGGER IF EXISTS symbols_ai;
+        DROP TRIGGER IF EXISTS symbols_ad;
+        DROP TRIGGER IF EXISTS symbols_au;
+        DROP TABLE IF EXISTS symbols_fts;
+      `);
+    }
+
+    // Check if call_sites table exists
+    const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='call_sites'").get();
+    if (!tables) {
+      // Will be created by SCHEMA
+    }
+  } catch {
+    // Fresh DB — SCHEMA will create everything
+  }
 }
 
 export function clearDatabase(db: Database.Database): void {
