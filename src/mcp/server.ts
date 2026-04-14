@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { openDatabase, getMeta } from '../storage/database.js';
 import { queryCodebase } from '../engine/query.js';
 import { analyzeImpact } from '../engine/impact.js';
+import { startWatcher } from '../engine/watcher.js';
 import {
   getPatterns,
   getStats,
@@ -20,6 +21,11 @@ import type Database from 'better-sqlite3';
 
 export async function startMcpServer(root: string): Promise<void> {
   const db = openDatabase(root);
+
+  // Start file watcher for auto-reindex
+  const watcher = startWatcher(root, db);
+  process.on('SIGINT', () => { watcher.close(); process.exit(0); });
+  process.on('SIGTERM', () => { watcher.close(); process.exit(0); });
 
   const server = new McpServer({
     name: 'probe',

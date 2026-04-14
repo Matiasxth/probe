@@ -3,6 +3,7 @@ import fs from 'fs';
 import chalk from 'chalk';
 import { openDatabase, clearDatabase, setMeta, getMeta } from '../storage/database.js';
 import { parseProject, resolveCallGraph } from '../parser/index.js';
+import { resolveMethodCalls } from '../parser/type-resolver.js';
 import { analyzeGitHistory } from '../analysis/git-history.js';
 import { extractPatterns } from '../analysis/patterns.js';
 import { DEFAULT_CONFIG } from '../types.js';
@@ -57,7 +58,8 @@ export async function indexCommand(opts: { root: string; git?: boolean; verbose?
   // Phase 2: Resolve call graph
   console.log(chalk.dim('  Resolving call graph...'));
   const calls = resolveCallGraph(db);
-  console.log(`  ${chalk.green('✓')} ${calls} call edges`);
+  const methodCalls = resolveMethodCalls(db);
+  console.log(`  ${chalk.green('✓')} ${calls + methodCalls} call edges (${calls} static, ${methodCalls} method)`);
 
   // Phase 3: Git history
   if (opts.git !== false) {

@@ -1,24 +1,39 @@
 import type Database from 'better-sqlite3';
 import type { QueryMatch, SymbolKind } from '../types.js';
 import { searchSymbols, getCallers, getCallees, getCoChanges, getFileByPath } from '../storage/queries.js';
+import { expandKeywords } from './concepts.js';
 
 interface QueryOptions {
   limit: number;
 }
 
 export function queryCodebase(db: Database.Database, task: string, opts: QueryOptions = { limit: 15 }): QueryMatch[] {
-  const keywords = extractKeywords(task);
+  const rawKeywords = extractKeywords(task);
+  const keywords = expandKeywords(rawKeywords);
   if (keywords.length === 0) return [];
 
   const resultMap = new Map<string, QueryMatch>();
 
+  const rawSet = new Set(rawKeywords.map((k) => k.toLowerCase()));
+
   // === Pass 1: Direct symbol name matches ===
   for (const keyword of keywords) {
     const matches = searchSymbols(db, keyword);
+    const isOriginal = rawSet.has(keyword.toLowerCase());
+
     for (const sym of matches) {
       const key = `${sym.file_path}:${sym.name}`;
       const existing = resultMap.get(key);
-      const relevance = computeRelevance(sym.name, keyword, sym.is_exported === 1);
+      let relevance = computeRelevance(sym.name, keyword, sym.is_exported === 1);
+
+      // Synonym matches get lower relevance than direct keyword matches
+      if (!isOriginal) {
+        relevance = Math.max(relevance - 15, 20);
+      }
+
+      const reason = isOriginal
+        ? `Match: "${keyword}" in ${sym.kind} name`
+        : `Semantic match: "${keyword}" (synonym) in ${sym.kind} name`;
 
       if (!existing || existing.relevance < relevance) {
         resultMap.set(key, {
@@ -27,7 +42,7 @@ export function queryCodebase(db: Database.Database, task: string, opts: QueryOp
           kind: sym.kind as SymbolKind,
           line: sym.line_start,
           signature: sym.signature,
-          reason: `Match: "${keyword}" in ${sym.kind} name`,
+          reason,
           relevance,
           calls: [],
           calledBy: [],
@@ -39,6 +54,7 @@ export function queryCodebase(db: Database.Database, task: string, opts: QueryOp
 
   // === Pass 2: File path matches ===
   for (const keyword of keywords) {
+    const isOriginal = rawSet.has(keyword.toLowerCase());
     const files = db.prepare(`
       SELECT f.*, COUNT(s.id) as symbol_count
       FROM files f
@@ -51,14 +67,15 @@ export function queryCodebase(db: Database.Database, task: string, opts: QueryOp
     for (const file of files) {
       const key = `${file.path}:__file__`;
       if (!resultMap.has(key)) {
+        const baseRelevance = isOriginal ? 50 : 35;
         resultMap.set(key, {
           file: file.path,
           symbol: null,
           kind: null,
           line: null,
           signature: null,
-          reason: `File path matches "${keyword}"`,
-          relevance: 50 + (file.symbol_count > 0 ? 10 : 0),
+          reason: isOriginal ? `File path matches "${keyword}"` : `File path matches "${keyword}" (synonym)`,
+          relevance: baseRelevance + (file.symbol_count > 0 ? 10 : 0),
           calls: [],
           calledBy: [],
           lastChanged: null,

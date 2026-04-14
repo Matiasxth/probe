@@ -16,6 +16,9 @@ export { openDatabase, clearDatabase, getMeta, setMeta } from './storage/databas
 export { queryCodebase } from './engine/query.js';
 export { analyzeImpact } from './engine/impact.js';
 export { parseProject, resolveCallGraph } from './parser/index.js';
+export { resolveMethodCalls } from './parser/type-resolver.js';
 export { analyzeGitHistory } from './analysis/git-history.js';
 export { extractPatterns } from './analysis/patterns.js';
+export { expandKeywords, getSynonyms } from './engine/concepts.js';
+export { startWatcher } from './engine/watcher.js';
 export { getStats, getPatterns, searchSymbols } from './storage/queries.js';
