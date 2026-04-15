@@ -567,27 +567,95 @@ export function extractTypeScript(tree: Parser.Tree, source: string, isTsx: bool
         break;
       }
 
-      // === CJS: module.exports / exports.X ===
+      // === CJS: prototype methods, module.exports, exports.X ===
       case 'expression_statement': {
         const expr = node.namedChildren[0];
         if (expr?.type === 'assignment_expression') {
           const left = expr.childForFieldName('left');
+          const right = expr.childForFieldName('right');
+
           if (left?.type === 'member_expression') {
             const obj = left.childForFieldName('object');
             const prop = left.childForFieldName('property');
+
             // module.exports = X → mark X as default export
             if (obj?.text === 'module' && prop?.text === 'exports') {
-              const right = expr.childForFieldName('right');
               if (right?.type === 'identifier') {
-                // Find the symbol and mark it as exported
                 const sym = symbols.find((s) => s.name === right.text);
                 if (sym) { sym.isExported = true; sym.isDefault = true; }
               }
+              // module.exports = { key: fn, ... } → extract each key as exported symbol
+              if (right?.type === 'object') {
+                for (const propNode of right.namedChildren) {
+                  if (propNode.type === 'pair') {
+                    const key = propNode.childForFieldName('key');
+                    if (key) {
+                      const existing = symbols.find((s) => s.name === key.text);
+                      if (existing) { existing.isExported = true; }
+                    }
+                  } else if (propNode.type === 'shorthand_property_identifier') {
+                    const existing = symbols.find((s) => s.name === propNode.text);
+                    if (existing) { existing.isExported = true; }
+                  }
+                }
+              }
             }
-            // exports.foo = ... → mark foo as exported
+
+            // exports.foo = function() {} → create symbol + mark exported
+            // exports.foo = require('bar') → mark as re-export
             if (obj?.text === 'exports' && prop) {
-              const existing = symbols.find((s) => s.name === prop.text);
-              if (existing) { existing.isExported = true; }
+              if (right?.type === 'function_expression' || right?.type === 'arrow_function') {
+                // Named function: exports.json = function json(obj) { ... }
+                const fnName = right.childForFieldName('name')?.text ?? prop.text;
+                symbols.push({
+                  name: prop.text,
+                  kind: 'function',
+                  lineStart: node.startPosition.row + 1,
+                  lineEnd: node.endPosition.row + 1,
+                  signature: extractSignature(node, prop.text, 'function'),
+                  docComment: getDocComment(node),
+                  isExported: true,
+                  isDefault: false,
+                  parentName: null,
+                  returnType: extractReturnType(right),
+                });
+                // Walk function body for call sites
+                const prevFunc = currentFunction;
+                currentFunction = prop.text;
+                walkChildren(right);
+                currentFunction = prevFunc;
+                return; // Don't walkChildren again
+              } else {
+                const existing = symbols.find((s) => s.name === prop.text);
+                if (existing) { existing.isExported = true; }
+              }
+            }
+
+            // proto.method = function() {} → extract as method
+            // app.init = function init() { ... }
+            // res.json = function json(obj) { ... }
+            if (obj?.type === 'identifier' && prop && obj.text !== 'module' && obj.text !== 'exports') {
+              if (right?.type === 'function_expression' || right?.type === 'arrow_function') {
+                const methodName = prop.text;
+                const parentName = obj.text;
+                symbols.push({
+                  name: methodName,
+                  kind: 'method',
+                  lineStart: node.startPosition.row + 1,
+                  lineEnd: node.endPosition.row + 1,
+                  signature: extractSignature(node, methodName, 'method'),
+                  docComment: getDocComment(node),
+                  isExported: true, // prototype methods are part of the public API
+                  isDefault: false,
+                  parentName,
+                  returnType: extractReturnType(right),
+                });
+                const prevFunc = currentFunction;
+                currentFunction = `${parentName}.${methodName}`;
+                walkChildren(right);
+                currentFunction = prevFunc;
+                return;
+              }
             }
           }
         }
