@@ -172,10 +172,21 @@ function migrateSchema(db: Database.Database): void {
       `);
     }
 
-    // Check if call_sites table exists
-    const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='call_sites'").get();
-    if (!tables) {
-      // Will be created by SCHEMA
+    // Add return_type to symbols if missing
+    if (cols.length > 0 && !cols.some((c) => c.name === 'return_type')) {
+      db.exec('ALTER TABLE symbols ADD COLUMN return_type TEXT');
+    }
+
+    // Add original_names to imports if missing
+    const importCols = db.pragma('table_info(imports)') as Array<{ name: string }>;
+    if (importCols.length > 0 && !importCols.some((c) => c.name === 'original_names')) {
+      db.exec("ALTER TABLE imports ADD COLUMN original_names TEXT NOT NULL DEFAULT '{}'");
+    }
+
+    // Add receiver_name to call_sites if missing
+    const csCols = db.pragma('table_info(call_sites)') as Array<{ name: string }>;
+    if (csCols.length > 0 && !csCols.some((c) => c.name === 'receiver_name')) {
+      db.exec('ALTER TABLE call_sites ADD COLUMN receiver_name TEXT');
     }
   } catch {
     // Fresh DB — SCHEMA will create everything
