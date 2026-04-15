@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3';
 import type { QueryMatch, SymbolKind } from '../types.js';
 import { searchSymbols, getCallers, getCallees, getCoChanges, getFileByPath } from '../storage/queries.js';
-import { expandKeywords } from './concepts.js';
+import { expandKeywords, composeCompoundIdentifiers } from './concepts.js';
 
 interface QueryOptions {
   limit: number;
@@ -9,12 +9,13 @@ interface QueryOptions {
 
 export function queryCodebase(db: Database.Database, task: string, opts: QueryOptions = { limit: 15 }): QueryMatch[] {
   const rawKeywords = extractKeywords(task);
-  const keywords = expandKeywords(rawKeywords);
+  const compoundIds = composeCompoundIdentifiers(rawKeywords);
+  const keywords = [...compoundIds, ...expandKeywords(rawKeywords)];
   if (keywords.length === 0) return [];
 
   const resultMap = new Map<string, QueryMatch>();
 
-  const rawSet = new Set(rawKeywords.map((k) => k.toLowerCase()));
+  const rawSet = new Set([...rawKeywords, ...compoundIds].map((k) => k.toLowerCase()));
 
   // === Pass 1: Direct symbol name matches ===
   for (const keyword of keywords) {
@@ -67,7 +68,20 @@ export function queryCodebase(db: Database.Database, task: string, opts: QueryOp
     for (const file of files) {
       const key = `${file.path}:__file__`;
       if (!resultMap.has(key)) {
-        const baseRelevance = isOriginal ? 50 : 35;
+        // Dynamic path relevance based on match quality
+        const segments = file.path.split('/');
+        const fileName = segments[segments.length - 1].replace(/\.[^.]+$/, '');
+        const dirSegments = segments.slice(0, -1);
+        const kw = keyword.toLowerCase();
+
+        let pathRelevance: number;
+        if (fileName.toLowerCase() === kw) pathRelevance = 85;
+        else if (dirSegments.some((seg) => seg.toLowerCase() === kw)) pathRelevance = 80;
+        else if (fileName.toLowerCase().includes(kw)) pathRelevance = 75;
+        else pathRelevance = isOriginal ? 50 : 35;
+
+        if (!isOriginal && pathRelevance > 35) pathRelevance -= 10;
+
         resultMap.set(key, {
           file: file.path,
           symbol: null,
@@ -75,7 +89,7 @@ export function queryCodebase(db: Database.Database, task: string, opts: QueryOp
           line: null,
           signature: null,
           reason: isOriginal ? `File path matches "${keyword}"` : `File path matches "${keyword}" (synonym)`,
-          relevance: baseRelevance + (file.symbol_count > 0 ? 10 : 0),
+          relevance: pathRelevance + (file.symbol_count > 0 ? 5 : 0),
           calls: [],
           calledBy: [],
           lastChanged: null,
@@ -211,6 +225,8 @@ export function queryCodebase(db: Database.Database, task: string, opts: QueryOp
 }
 
 function extractKeywords(task: string): string[] {
+  // Only filter true natural language stop words.
+  // Programming verbs (create, update, delete, etc.) are kept — they form identifier names.
   const stopWords = new Set([
     'the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
     'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could',
@@ -219,8 +235,6 @@ function extractKeywords(task: string): string[] {
     'before', 'after', 'above', 'below', 'between', 'and', 'but', 'or',
     'not', 'no', 'nor', 'so', 'yet', 'both', 'either', 'neither',
     'this', 'that', 'these', 'those', 'it', 'its',
-    'fix', 'bug', 'add', 'update', 'change', 'modify', 'implement',
-    'create', 'make', 'refactor', 'move', 'remove', 'delete',
     'que', 'el', 'la', 'los', 'las', 'un', 'una', 'de', 'en', 'con',
     'por', 'para', 'como', 'del', 'al',
   ]);

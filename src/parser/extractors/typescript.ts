@@ -523,6 +523,28 @@ export function extractTypeScript(tree: Parser.Tree, source: string, isTsx: bool
               });
             }
           }
+
+          // Scan arguments for function references (function-as-argument pattern)
+          // e.g., app.get("/path", handler), emitter.on("event", callback)
+          const argsNode = node.childForFieldName('arguments');
+          if (argsNode) {
+            for (const arg of argsNode.namedChildren) {
+              if (arg.type === 'identifier' && arg.text.length > 1 && arg.text.length < 60) {
+                // Skip common non-function arguments
+                const skip = new Set(['true', 'false', 'null', 'undefined', 'this', 'self',
+                  'data', 'value', 'result', 'err', 'error', 'ctx', 'req', 'res',
+                  'options', 'config', 'params', 'args', 'props', 'state', 'key',
+                  'index', 'item', 'name', 'type', 'path', 'url', 'msg', 'message']);
+                if (!skip.has(arg.text)) {
+                  callSites.push({
+                    callerName: currentFunction,
+                    calleeName: arg.text,
+                    line: node.startPosition.row + 1,
+                  });
+                }
+              }
+            }
+          }
         }
         break;
       }

@@ -8,6 +8,7 @@ export interface ProbeConfig {
   gitHistory: {
     maxCommits: number;
     minCoChangeConfidence: number;
+    maxFilesPerCommit: number;
   };
 }
 
@@ -18,7 +19,8 @@ export const DEFAULT_CONFIG: ProbeConfig = {
   maxFileSize: 512_000,
   gitHistory: {
     maxCommits: 500,
-    minCoChangeConfidence: 0.5,
+    minCoChangeConfidence: 0.3,
+    maxFilesPerCommit: 30,
   },
 };
 

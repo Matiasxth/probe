@@ -147,6 +147,51 @@ export function getSynonyms(term: string): string[] {
 }
 
 /**
+ * Compose compound identifiers from multiple keywords.
+ * ["create", "user"] → ["create_user", "createUser", "CreateUser", "create-user"]
+ * Also handles 3-word: ["get", "user", "by", "id"] → ["get_user_by_id", "getUserById", ...]
+ */
+export function composeCompoundIdentifiers(keywords: string[]): string[] {
+  if (keywords.length < 2) return [];
+
+  const compounds: string[] = [];
+
+  // Generate 2-word and 3-word compounds from adjacent keywords
+  for (let i = 0; i < keywords.length - 1; i++) {
+    // 2-word
+    const pair = [keywords[i], keywords[i + 1]];
+    compounds.push(...composeVariants(pair));
+
+    // 3-word
+    if (i < keywords.length - 2) {
+      const triple = [keywords[i], keywords[i + 1], keywords[i + 2]];
+      compounds.push(...composeVariants(triple));
+    }
+  }
+
+  // Also compose ALL keywords if 4 or fewer
+  if (keywords.length >= 3 && keywords.length <= 4) {
+    compounds.push(...composeVariants(keywords));
+  }
+
+  return [...new Set(compounds)];
+}
+
+function composeVariants(words: string[]): string[] {
+  const lower = words.map((w) => w.toLowerCase());
+  return [
+    // snake_case: create_user
+    lower.join('_'),
+    // camelCase: createUser
+    lower[0] + lower.slice(1).map((w) => w[0].toUpperCase() + w.slice(1)).join(''),
+    // PascalCase: CreateUser
+    lower.map((w) => w[0].toUpperCase() + w.slice(1)).join(''),
+    // kebab-case: create-user
+    lower.join('-'),
+  ];
+}
+
+/**
  * Split a camelCase or snake_case identifier into parts.
  * "loginUser" → ["login", "user"]
  * "find_by_email" → ["find", "by", "email"]

@@ -38,8 +38,7 @@ export async function analyzeGitHistory(
       .map((f) => f.replace(/\\/g, '/'))
       .filter((f) => indexedFiles.has(f));
 
-    if (files.length > 0 && files.length <= 20) {
-      // Skip huge commits (merges, bulk changes)
+    if (files.length > 0 && files.length <= config.gitHistory.maxFilesPerCommit) {
       commits.push({ hash: entry.hash, files });
     }
   }

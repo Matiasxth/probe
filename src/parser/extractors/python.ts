@@ -197,6 +197,25 @@ export function extractPython(tree: Parser.Tree, source: string): {
               });
             }
           }
+
+          // Scan arguments for function references
+          const argsNode = node.childForFieldName('arguments');
+          if (argsNode) {
+            for (const arg of argsNode.namedChildren) {
+              if (arg.type === 'identifier' && arg.text.length > 1 && arg.text.length < 60) {
+                const skip = new Set(['True', 'False', 'None', 'self', 'cls',
+                  'data', 'value', 'result', 'err', 'args', 'kwargs', 'key',
+                  'index', 'item', 'name', 'path', 'msg']);
+                if (!skip.has(arg.text) && !arg.text.startsWith('_')) {
+                  callSites.push({
+                    callerName: currentFunction,
+                    calleeName: arg.text,
+                    line: node.startPosition.row + 1,
+                  });
+                }
+              }
+            }
+          }
         }
         break;
       }

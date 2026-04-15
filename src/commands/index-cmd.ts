@@ -1,6 +1,7 @@
 import path from 'path';
-import fs from 'fs';
 import chalk from 'chalk';
+
+declare const globalThis: { __PROBE_VERSION__: string };
 import { openDatabase, clearDatabase, setMeta, getMeta } from '../storage/database.js';
 import { parseProject, resolveCallGraph } from '../parser/index.js';
 import { resolveMethodCalls } from '../parser/type-resolver.js';
@@ -75,7 +76,7 @@ export async function indexCommand(opts: { root: string; git?: boolean; verbose?
 
   // Store metadata
   const duration = Date.now() - start;
-  setMeta(db, 'version', '0.1.0');
+  setMeta(db, 'version', globalThis.__PROBE_VERSION__ ?? '0.0.0-dev');
   setMeta(db, 'indexed_at', new Date().toISOString());
   setMeta(db, 'root', root);
   setMeta(db, 'duration_ms', String(duration));
