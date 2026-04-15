@@ -19,6 +19,13 @@ export async function analyzeGitHistory(
   const isRepo = await git.checkIsRepo().catch(() => false);
   if (!isRepo) return 0;
 
+  // Detect shallow clone
+  const isShallow = await git.raw(['rev-parse', '--is-shallow-repository']).catch(() => 'false');
+  if (isShallow.trim() === 'true') {
+    process.stderr.write('[probe] Shallow clone detected — co-change analysis may be limited.\n');
+    process.stderr.write('[probe] Run `git fetch --deepen=500` for better results.\n');
+  }
+
   // Get recent commits with changed files
   const log = await git.log({
     maxCount: config.gitHistory.maxCommits,
@@ -78,6 +85,53 @@ export async function analyzeGitHistory(
     if (confidence >= config.gitHistory.minCoChangeConfidence && count >= 2) {
       insertCoChange(db, fileA, fileB, count, totalCommits, Math.round(confidence * 100) / 100);
       stored++;
+    }
+  }
+
+  // Fallback: if no co-changes from git, use file proximity heuristic
+  if (stored === 0) {
+    stored = addProximityCoChanges(db, config);
+  }
+
+  return stored;
+}
+
+/**
+ * When git history is unavailable, infer co-changes from file proximity:
+ * files in the same directory with similar base names likely co-change.
+ * e.g., auth_service.py ↔ auth_controller.py, user.model.ts ↔ user.service.ts
+ */
+function addProximityCoChanges(db: Database.Database, config: ProbeConfig): number {
+  const files = db.prepare('SELECT path FROM files').all() as Array<{ path: string }>;
+
+  // Group files by directory
+  const dirFiles = new Map<string, string[]>();
+  for (const f of files) {
+    const dir = f.path.split('/').slice(0, -1).join('/');
+    const list = dirFiles.get(dir) ?? [];
+    list.push(f.path);
+    dirFiles.set(dir, list);
+  }
+
+  let stored = 0;
+  for (const [_dir, paths] of dirFiles) {
+    if (paths.length < 2 || paths.length > 15) continue;
+
+    for (let i = 0; i < paths.length; i++) {
+      for (let j = i + 1; j < paths.length; j++) {
+        const nameA = paths[i].split('/').pop()!.replace(/\.[^.]+$/, '').toLowerCase();
+        const nameB = paths[j].split('/').pop()!.replace(/\.[^.]+$/, '').toLowerCase();
+
+        // Check name similarity: shared prefix or common base
+        const partsA = nameA.split(/[._-]/);
+        const partsB = nameB.split(/[._-]/);
+        const shared = partsA.filter((p) => partsB.includes(p) && p.length > 2);
+
+        if (shared.length > 0) {
+          insertCoChange(db, paths[i], paths[j], 1, 1, 0.3);
+          stored++;
+        }
+      }
     }
   }
 

@@ -218,13 +218,77 @@ export function queryCodebase(db: Database.Database, task: string, opts: QueryOp
     }
   }
 
+  // === Pass 6: Directory summary when query matches a directory ===
+  for (const keyword of rawKeywords) {
+    const kw = keyword.toLowerCase();
+    // Find directories matching this keyword
+    const dirFiles = db.prepare(`
+      SELECT f.path FROM files f
+      WHERE f.path LIKE ? AND f.path LIKE ?
+      LIMIT 50
+    `).all(`%/${kw}/%`, `%`) as Array<{ path: string }>;
+
+    if (dirFiles.length >= 3) {
+      // Find the directory path
+      const dirPaths = new Set<string>();
+      for (const f of dirFiles) {
+        const parts = f.path.split('/');
+        for (let i = 0; i < parts.length; i++) {
+          if (parts[i].toLowerCase() === kw) {
+            dirPaths.add(parts.slice(0, i + 1).join('/'));
+          }
+        }
+      }
+
+      for (const dir of dirPaths) {
+        const key = `${dir}:__dir__`;
+        if (!resultMap.has(key)) {
+          // Get exported symbols in this directory
+          const exports = db.prepare(`
+            SELECT s.name, s.kind FROM symbols s
+            JOIN files f ON f.id = s.file_id
+            WHERE f.path LIKE ? AND s.is_exported = 1
+            ORDER BY s.kind, s.name
+            LIMIT 15
+          `).all(`${dir}/%`) as Array<{ name: string; kind: string }>;
+
+          const fileCount = dirFiles.filter((f) => f.path.startsWith(dir + '/')).length;
+          const exportList = exports.map((e) => e.name).join(', ');
+
+          resultMap.set(key, {
+            file: dir + '/',
+            symbol: null,
+            kind: null,
+            line: null,
+            signature: `${fileCount} files | Exports: ${exportList || 'none'}`,
+            reason: `Directory matches "${keyword}"`,
+            relevance: 78,
+            calls: [],
+            calledBy: [],
+            lastChanged: null,
+          });
+        }
+      }
+    }
+  }
+
   // Sort by relevance and return
   return [...resultMap.values()]
     .sort((a, b) => b.relevance - a.relevance)
     .slice(0, opts.limit);
 }
 
+function stripIntent(task: string): string {
+  // Remove conversational intent patterns — keep the subject
+  return task
+    .replace(/^(how does?|how do|what is|what are|where is|where are|show me|tell me|explain|find|look for|search for)\s+/i, '')
+    .replace(/\s+(work|works|working|defined|located|implemented|used|called|handled|processed|managed)\s*\??$/i, '')
+    .replace(/^(the|a|an)\s+/i, '')
+    .trim();
+}
+
 function extractKeywords(task: string): string[] {
+  task = stripIntent(task);
   // Only filter true natural language stop words.
   // Programming verbs (create, update, delete, etc.) are kept — they form identifier names.
   const stopWords = new Set([

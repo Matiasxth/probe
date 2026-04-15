@@ -1,14 +1,16 @@
 import type Parser from 'web-tree-sitter';
-import type { ParsedSymbol, ParsedImport, ParsedCallSite, SymbolKind } from '../../types.js';
+import type { ParsedSymbol, ParsedImport, ParsedCallSite, ParsedTypeHint, SymbolKind } from '../../types.js';
 
 export function extractPython(tree: Parser.Tree, source: string): {
   symbols: ParsedSymbol[];
   imports: ParsedImport[];
   callSites: ParsedCallSite[];
+  typeHints: ParsedTypeHint[];
 } {
   const symbols: ParsedSymbol[] = [];
   const imports: ParsedImport[] = [];
   const callSites: ParsedCallSite[] = [];
+  const typeHints: ParsedTypeHint[] = [];
   const lines = source.split('\n');
 
   let currentFunction: string | null = null;
@@ -50,6 +52,51 @@ export function extractPython(tree: Parser.Tree, source: string): {
     return decorators;
   }
 
+  function extractParamRefs(paramsNode: Parser.SyntaxNode, funcName: string, line: number): void {
+    for (const param of paramsNode.namedChildren) {
+      // typed_parameter, typed_default_parameter, default_parameter
+      const defaultVal = param.childForFieldName('value');
+      const typeNode = param.childForFieldName('type');
+
+      // Extract function refs from defaults: Depends(get_db), Security(check_auth)
+      if (defaultVal?.type === 'call') {
+        const callFunc = defaultVal.childForFieldName('function');
+        const callArgs = defaultVal.childForFieldName('arguments');
+        if (callArgs) {
+          for (const arg of callArgs.namedChildren) {
+            if (arg.type === 'identifier' && arg.text.length > 1) {
+              callSites.push({ callerName: funcName, calleeName: arg.text, line });
+            }
+          }
+        }
+      }
+
+      // Extract type from Annotated[Type, ...] → use first argument as real type
+      if (typeNode) {
+        let typeName = typeNode.text;
+        if (typeName.startsWith('Annotated[')) {
+          // Annotated[str, Header()] → str
+          const inner = typeName.slice(10, -1); // strip Annotated[ and ]
+          const firstComma = inner.indexOf(',');
+          if (firstComma > 0) typeName = inner.slice(0, firstComma).trim();
+        }
+        // Extract type hint for parameter
+        const paramName = param.childForFieldName('name');
+        if (paramName?.type === 'identifier') {
+          const clean = typeName.replace(/^Optional\[(.+)\]$/, '$1').split('[')[0].split('|')[0].trim();
+          if (clean.length > 1 && clean.length < 50 && /^[A-Z]/.test(clean)) {
+            typeHints.push({
+              scope: funcName,
+              variableName: paramName.text,
+              typeName: clean,
+              source: 'parameter',
+            });
+          }
+        }
+      }
+    }
+  }
+
   function walk(node: Parser.SyntaxNode): void {
     switch (node.type) {
       case 'function_definition':
@@ -87,6 +134,29 @@ export function extractPython(tree: Parser.Tree, source: string): {
 
           const prevFunc = currentFunction;
           currentFunction = currentClass ? `${currentClass}.${name}` : name;
+
+          // Extract function references from parameter defaults: Depends(get_db), Security(fn)
+          if (params) {
+            extractParamRefs(params, currentFunction, node.startPosition.row + 1);
+          }
+
+          // Extract decorator call sites: @app.get("/path") → route registration
+          for (const dec of decorators) {
+            // @app.get(...) → extract 'get' as a call from this function
+            const decMatch = dec.match(/@(\w+(?:\.\w+)*)/);
+            if (decMatch) {
+              const parts = decMatch[1].split('.');
+              const decName = parts[parts.length - 1];
+              if (decName.length > 1 && !['staticmethod', 'classmethod', 'property', 'abstractmethod', 'override'].includes(decName)) {
+                callSites.push({
+                  callerName: currentFunction,
+                  calleeName: decName,
+                  line: node.startPosition.row,
+                });
+              }
+            }
+          }
+
           walkChildren(node);
           currentFunction = prevFunc;
           return;
@@ -300,7 +370,7 @@ export function extractPython(tree: Parser.Tree, source: string): {
   }
 
   walk(tree.rootNode);
-  return { symbols, imports, callSites };
+  return { symbols, imports, callSites, typeHints };
 }
 
 function extractPyReturnType(text: string): string | undefined {

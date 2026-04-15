@@ -106,7 +106,7 @@ export function resolveMethodCalls(db: Database.Database): number {
     return id;
   }
 
-  const insertCall = db.prepare('INSERT INTO calls (caller_symbol_id, callee_symbol_id, line) VALUES (?, ?, ?)');
+  const insertCall = db.prepare('INSERT INTO calls (caller_symbol_id, callee_symbol_id, line, confidence) VALUES (?, ?, ?, ?)');
   const seen = new Set<string>();
   let resolved = 0;
 
@@ -195,7 +195,7 @@ export function resolveMethodCalls(db: Database.Database): number {
       if (seen.has(key)) continue;
       seen.add(key);
 
-      insertCall.run(callerId, targetId, cs.line);
+      insertCall.run(callerId, targetId, cs.line, 0.8);
       resolved++;
     }
   });

@@ -360,14 +360,14 @@ export function resolveCallGraph(db: Database.Database, root?: string): number {
 
   // 4. Read all raw call sites from staging table
   const rawCallSites = db.prepare(`
-    SELECT cs.file_id, cs.caller_name, cs.callee_name, cs.line
+    SELECT cs.file_id, cs.caller_name, cs.callee_name, cs.receiver_name, cs.line
     FROM call_sites cs
   `).all() as Array<{
-    file_id: number; caller_name: string; callee_name: string; line: number;
+    file_id: number; caller_name: string; callee_name: string; receiver_name: string | null; line: number;
   }>;
 
   // 5. Resolve each call site to symbol IDs
-  const insertCall = db.prepare('INSERT INTO calls (caller_symbol_id, callee_symbol_id, line) VALUES (?, ?, ?)');
+  const insertCall = db.prepare('INSERT INTO calls (caller_symbol_id, callee_symbol_id, line, confidence) VALUES (?, ?, ?, ?)');
   const seen = new Set<string>(); // deduplicate
   let resolvedCount = 0;
 
@@ -451,7 +451,9 @@ export function resolveCallGraph(db: Database.Database, root?: string): number {
       if (seen.has(key)) continue;
       seen.add(key);
 
-      insertCall.run(callerId, calleeId, cs.line);
+      // Confidence: direct call = 1.0, function-as-argument (has receiver or is ambiguous) = 0.7
+      const confidence = cs.receiver_name ? 0.7 : 1.0;
+      insertCall.run(callerId, calleeId, cs.line, confidence);
       resolvedCount++;
     }
   });
