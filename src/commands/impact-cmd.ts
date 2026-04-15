@@ -21,23 +21,38 @@ export async function impactCommand(target: string, opts: { root: string; depth:
     return;
   }
 
-  // Header
-  console.log(chalk.cyan(`\nImpact analysis for:`) + ` ${result.target.symbol}`);
+  // Blast radius header
+  const br = result.blastRadius;
+  const levelColor = br.level === 'CRITICAL' ? chalk.red.bold : br.level === 'HIGH' ? chalk.red : br.level === 'MEDIUM' ? chalk.yellow : chalk.green;
+  console.log(`\n${levelColor(`  Blast radius: ${br.level}`)} ${chalk.dim(`(score: ${br.score}/100)`)}`);
+  console.log(chalk.dim(`  ${br.signatureBreaks} signature breaks, ${br.behaviorAffects} behavior affects, ${br.coreFiles} core files, ${br.testFiles} test files`));
+
+  // Target
+  console.log(chalk.cyan(`\n  Target:`) + ` ${result.target.symbol}`);
   console.log(chalk.dim(`  ${result.target.file}:${result.target.line}`));
   console.log(chalk.dim(`  ${result.target.signature}`));
 
-  // Direct dependents
-  if (result.directDependents.length > 0) {
-    console.log(chalk.white.bold('\n━━ Direct dependents (break if signature changes) ━━'));
-    for (const dep of result.directDependents) {
-      const typeIcon = dep.type === 'call' ? '→' : dep.type === 'type' ? '⊳' : '↠';
-      console.log(`  ${chalk.blue(dep.file)}:${chalk.dim(String(dep.line))} ${typeIcon} ${chalk.white(dep.symbol)}() ${chalk.dim(`[${dep.type}]`)}`);
+  // Dependencies (what this function calls)
+  if (result.dependencies.length > 0) {
+    console.log(chalk.white.bold('\n━━ Depends on (break if these change) ━━━━━━━━━━'));
+    for (const dep of result.dependencies) {
+      console.log(`  ${chalk.blue(dep.file)}:${chalk.dim(String(dep.line))} ← ${chalk.white(dep.symbol)}()`);
     }
   }
 
-  // Indirect dependents
+  // Direct dependents (signature breaks)
+  if (result.directDependents.length > 0) {
+    console.log(chalk.white.bold('\n━━ Signature dependents (break if you change params/return) ━━'));
+    for (const dep of result.directDependents) {
+      const typeIcon = dep.type === 'call' ? '→' : dep.type === 'type' ? '⊳' : '↠';
+      const riskIcon = dep.risk === 'high' ? chalk.red('●') : dep.risk === 'medium' ? chalk.yellow('●') : chalk.dim('○');
+      console.log(`  ${riskIcon} ${chalk.blue(dep.file)}:${chalk.dim(String(dep.line))} ${typeIcon} ${chalk.white(dep.symbol)}()`);
+    }
+  }
+
+  // Indirect dependents (behavior affects)
   if (result.indirectDependents.length > 0) {
-    console.log(chalk.white.bold('\n━━ Indirect dependents ━━━━━━━━━━━━━━━━━━━━━━━━━'));
+    console.log(chalk.white.bold('\n━━ Behavior dependents (affected if logic changes) ━━'));
     for (const dep of result.indirectDependents) {
       const indent = '  '.repeat(dep.depth);
       console.log(`${indent}${chalk.blue(dep.file)}:${chalk.dim(String(dep.line))} → ${chalk.white(dep.symbol)}() ${chalk.dim(`[depth ${dep.depth}]`)}`);
@@ -61,9 +76,7 @@ export async function impactCommand(target: string, opts: { root: string; depth:
       const label = test.testName ? `${test.testName}()` : 'file';
       console.log(`  ${chalk.green('✓')} ${chalk.blue(test.file)}:${chalk.dim(String(test.line))} ${chalk.dim(label)}`);
     }
+  } else if (br.signatureBreaks > 0) {
+    console.log(chalk.yellow('\n  ⚠ No tests cover this function — risk is higher'));
   }
-
-  // Summary
-  const total = result.directDependents.length + result.indirectDependents.length;
-  console.log(chalk.dim(`\n  ${total} dependents, ${result.tests.length} tests, ${result.coChangeCorrelations.length} co-changes`));
 }

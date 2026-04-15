@@ -181,17 +181,26 @@ export interface ImpactResult {
     line: number;
     signature: string;
   };
+  // Who calls this (break if signature changes)
   directDependents: Array<{
     file: string;
     symbol: string;
     line: number;
     type: 'call' | 'type' | 'import';
+    risk: 'high' | 'medium' | 'low';
   }>;
+  // Transitive callers
   indirectDependents: Array<{
     file: string;
     symbol: string;
     line: number;
     depth: number;
+  }>;
+  // What this function calls (break if dependencies change)
+  dependencies: Array<{
+    file: string;
+    symbol: string;
+    line: number;
   }>;
   coChangeCorrelations: Array<{
     file: string;
@@ -203,6 +212,15 @@ export interface ImpactResult {
     testName: string | null;
     line: number;
   }>;
+  // Blast radius summary
+  blastRadius: {
+    level: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+    signatureBreaks: number;   // direct callers that break if signature changes
+    behaviorAffects: number;   // indirect callers affected if behavior changes
+    coreFiles: number;         // dependents in src/ (not test/)
+    testFiles: number;         // dependents in test/
+    score: number;             // 0-100 risk score
+  };
 }
 
 export interface PatternSummary {

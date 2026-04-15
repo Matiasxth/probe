@@ -4,6 +4,7 @@ import {
   findSymbolAt,
   findSymbolByName,
   getCallers,
+  getCallees,
   getTypeUsers,
   getCoChanges,
   getSymbolsByFile,
@@ -14,12 +15,9 @@ export function analyzeImpact(
   target: string,
   maxDepth: number = 3,
 ): ImpactResult | null {
-  // Parse target: "file.ts:line" or "file.ts:functionName" or "functionName"
   const { filePath, line, symbolName } = parseTarget(target);
 
-  // Find the target symbol
   let targetSymbol;
-
   if (filePath && line) {
     targetSymbol = findSymbolAt(db, filePath, line);
   } else if (filePath && symbolName) {
@@ -27,7 +25,6 @@ export function analyzeImpact(
     targetSymbol = fileSymbols.find((s) => s.name === symbolName);
   } else if (symbolName) {
     const candidates = findSymbolByName(db, symbolName);
-    // Prefer exported
     targetSymbol = candidates.find((s) => s.is_exported) ?? candidates[0];
   }
 
@@ -43,11 +40,13 @@ export function analyzeImpact(
     },
     directDependents: [],
     indirectDependents: [],
+    dependencies: [],
     coChangeCorrelations: [],
     tests: [],
+    blastRadius: { level: 'LOW', signatureBreaks: 0, behaviorAffects: 0, coreFiles: 0, testFiles: 0, score: 0 },
   };
 
-  // === Direct dependents (who calls this?) ===
+  // === Direct dependents (who calls this? — break if signature changes) ===
   const directCallers = getCallers(db, targetSymbol.id);
   for (const caller of directCallers) {
     result.directDependents.push({
@@ -55,31 +54,28 @@ export function analyzeImpact(
       symbol: caller.name,
       line: caller.call_line || caller.line_start,
       type: 'call',
+      risk: computeRisk(caller.file_path ?? '', caller.is_exported === 1, db, caller.id),
     });
   }
 
-  // === Type dependents ===
+  // Type dependents
   const typeUsers = getTypeUsers(db, targetSymbol.id);
   for (const user of typeUsers) {
-    const alreadyAdded = result.directDependents.some(
-      (d) => d.file === user.file_path && d.symbol === user.name,
-    );
-    if (!alreadyAdded) {
-      result.directDependents.push({
-        file: user.file_path ?? '',
-        symbol: user.name,
-        line: user.line_start,
-        type: 'type',
-      });
-    }
+    if (result.directDependents.some((d) => d.file === user.file_path && d.symbol === user.name)) continue;
+    result.directDependents.push({
+      file: user.file_path ?? '',
+      symbol: user.name,
+      line: user.line_start,
+      type: 'type',
+      risk: computeRisk(user.file_path ?? '', user.is_exported === 1, db, user.id),
+    });
   }
 
-  // === Indirect dependents (BFS through call graph) ===
+  // === Indirect dependents (BFS upward — affected if behavior changes) ===
   if (maxDepth > 1) {
     const visited = new Set<number>([targetSymbol.id]);
     const queue: Array<{ id: number; depth: number }> = [];
 
-    // Start from direct callers
     for (const caller of directCallers) {
       if (!visited.has(caller.id)) {
         visited.add(caller.id);
@@ -95,25 +91,31 @@ export function analyzeImpact(
       for (const caller of callers) {
         if (visited.has(caller.id)) continue;
         visited.add(caller.id);
-
         result.indirectDependents.push({
           file: caller.file_path ?? '',
           symbol: caller.name,
           line: caller.line_start,
           depth,
         });
-
-        if (depth < maxDepth) {
-          queue.push({ id: caller.id, depth: depth + 1 });
-        }
+        if (depth < maxDepth) queue.push({ id: caller.id, depth: depth + 1 });
       }
     }
   }
 
+  // === Dependencies (what does this function call? — break if they change) ===
+  const callees = getCallees(db, targetSymbol.id);
+  for (const callee of callees) {
+    result.dependencies.push({
+      file: callee.file_path ?? '',
+      symbol: callee.name,
+      line: callee.line_start,
+    });
+  }
+
   // === Co-change correlations ===
-  const filePath_ = targetSymbol.file_path;
-  if (filePath_) {
-    const coChanges = getCoChanges(db, filePath_);
+  const targetFile = targetSymbol.file_path;
+  if (targetFile) {
+    const coChanges = getCoChanges(db, targetFile);
     for (const cc of coChanges.slice(0, 10)) {
       result.coChangeCorrelations.push({
         file: cc.file,
@@ -124,7 +126,6 @@ export function analyzeImpact(
   }
 
   // === Tests ===
-  // Find test files that reference this symbol
   const testFiles = db.prepare(`
     SELECT DISTINCT f.path, s.name, s.line_start
     FROM symbols s
@@ -137,20 +138,14 @@ export function analyzeImpact(
   `).all(targetSymbol.id) as Array<{ path: string; name: string; line_start: number }>;
 
   for (const test of testFiles) {
-    result.tests.push({
-      file: test.path,
-      testName: test.name,
-      line: test.line_start,
-    });
+    result.tests.push({ file: test.path, testName: test.name, line: test.line_start });
   }
 
-  // Also find test files by naming convention
-  if (filePath_) {
-    const baseName = filePath_.replace(/\.[^.]+$/, '');
+  if (targetFile) {
+    const baseName = targetFile.replace(/\.[^.]+$/, '');
     const testByName = db.prepare(`
       SELECT path FROM files
-      WHERE (path LIKE ? OR path LIKE ?)
-      AND path LIKE '%test%'
+      WHERE (path LIKE ? OR path LIKE ?) AND path LIKE '%test%'
     `).all(`${baseName}.test.%`, `${baseName}.spec.%`) as Array<{ path: string }>;
 
     for (const tf of testByName) {
@@ -160,27 +155,79 @@ export function analyzeImpact(
     }
   }
 
+  // === Compute blast radius ===
+  result.blastRadius = computeBlastRadius(result);
+
   return result;
 }
 
+function computeRisk(filePath: string, isExported: boolean, db: Database.Database, symbolId: number): 'high' | 'medium' | 'low' {
+  const isTest = filePath.includes('test') || filePath.includes('spec');
+  if (isTest) return 'low';
+
+  // Count how many callers this dependent has (cascade risk)
+  const callerCount = (db.prepare(
+    'SELECT COUNT(*) as c FROM calls WHERE callee_symbol_id = ?',
+  ).get(symbolId) as { c: number }).c;
+
+  if (isExported && callerCount > 3) return 'high';
+  if (isExported || callerCount > 1) return 'medium';
+  return 'low';
+}
+
+function computeBlastRadius(result: ImpactResult): ImpactResult['blastRadius'] {
+  const allDeps = [...result.directDependents, ...result.indirectDependents];
+
+  const coreFiles = new Set<string>();
+  const testFiles = new Set<string>();
+
+  for (const dep of allDeps) {
+    if (dep.file.includes('test') || dep.file.includes('spec')) {
+      testFiles.add(dep.file);
+    } else {
+      coreFiles.add(dep.file);
+    }
+  }
+
+  const signatureBreaks = result.directDependents.length;
+  const behaviorAffects = result.indirectDependents.length;
+
+  // Score: weighted sum
+  let score = 0;
+  score += signatureBreaks * 10;  // each direct dependent = 10 points
+  score += behaviorAffects * 3;   // each indirect = 3 points
+  score += coreFiles.size * 5;    // each core file affected = 5 points
+  score += result.directDependents.filter((d) => d.risk === 'high').length * 15; // high risk bonus
+
+  // Penalty if no tests cover this
+  if (result.tests.length === 0 && signatureBreaks > 0) score += 20;
+
+  score = Math.min(score, 100);
+
+  let level: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+  if (score >= 80) level = 'CRITICAL';
+  else if (score >= 50) level = 'HIGH';
+  else if (score >= 20) level = 'MEDIUM';
+  else level = 'LOW';
+
+  return {
+    level,
+    signatureBreaks,
+    behaviorAffects,
+    coreFiles: coreFiles.size,
+    testFiles: testFiles.size,
+    score,
+  };
+}
+
 function parseTarget(target: string): { filePath: string | null; line: number | null; symbolName: string | null } {
-  // "src/auth/service.ts:45"
   const lineMatch = target.match(/^(.+):(\d+)$/);
-  if (lineMatch) {
-    return { filePath: lineMatch[1], line: parseInt(lineMatch[2], 10), symbolName: null };
-  }
+  if (lineMatch) return { filePath: lineMatch[1], line: parseInt(lineMatch[2], 10), symbolName: null };
 
-  // "src/auth/service.ts:loginUser"
   const nameMatch = target.match(/^(.+):([a-zA-Z_]\w*)$/);
-  if (nameMatch) {
-    return { filePath: nameMatch[1], line: null, symbolName: nameMatch[2] };
-  }
+  if (nameMatch) return { filePath: nameMatch[1], line: null, symbolName: nameMatch[2] };
 
-  // "loginUser" (just a symbol name)
-  if (/^[a-zA-Z_]\w*$/.test(target)) {
-    return { filePath: null, line: null, symbolName: target };
-  }
+  if (/^[a-zA-Z_]\w*$/.test(target)) return { filePath: null, line: null, symbolName: target };
 
-  // Assume it's a file path
   return { filePath: target, line: null, symbolName: null };
 }
