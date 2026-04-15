@@ -17,8 +17,8 @@ export function insertSymbol(
   parentSymbolId: number | null,
 ): number {
   const result = db.prepare(`
-    INSERT INTO symbols (file_id, name, kind, line_start, line_end, signature, doc_comment, is_exported, is_default, parent_symbol_id, tags)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO symbols (file_id, name, kind, line_start, line_end, signature, doc_comment, is_exported, is_default, parent_symbol_id, tags, return_type)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     fileId,
     symbol.name,
@@ -31,6 +31,7 @@ export function insertSymbol(
     symbol.isDefault ? 1 : 0,
     parentSymbolId,
     JSON.stringify(symbol.tags ?? []),
+    symbol.returnType ?? null,
   );
   return result.lastInsertRowid as number;
 }
@@ -104,9 +105,17 @@ export function insertParsedFile(db: Database.Database, file: ParsedFile): void 
     const classes = file.symbols.filter((s) => s.kind === 'class');
     const nonClasses = file.symbols.filter((s) => s.kind !== 'class');
 
+    const insertImpl = db.prepare('INSERT OR IGNORE INTO implements (class_symbol_id, interface_name) VALUES (?, ?)');
+
     for (const cls of classes) {
       const clsId = insertSymbol(db, fileId, cls, null);
       symbolMap.set(cls.name, clsId);
+      // Store implements relationships
+      if (cls.implementsInterfaces) {
+        for (const iface of cls.implementsInterfaces) {
+          insertImpl.run(clsId, iface);
+        }
+      }
     }
 
     for (const sym of nonClasses) {

@@ -23,7 +23,8 @@ CREATE TABLE IF NOT EXISTS symbols (
   is_exported INTEGER NOT NULL DEFAULT 0,
   is_default INTEGER NOT NULL DEFAULT 0,
   parent_symbol_id INTEGER REFERENCES symbols(id) ON DELETE CASCADE,
-  tags TEXT NOT NULL DEFAULT '[]'
+  tags TEXT NOT NULL DEFAULT '[]',
+  return_type TEXT
 );
 
 CREATE TABLE IF NOT EXISTS imports (
@@ -77,6 +78,14 @@ CREATE TABLE IF NOT EXISTS call_sites (
   receiver_name TEXT,
   line INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS implements (
+  class_symbol_id INTEGER NOT NULL REFERENCES symbols(id) ON DELETE CASCADE,
+  interface_name TEXT NOT NULL,
+  PRIMARY KEY (class_symbol_id, interface_name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_implements_interface ON implements(interface_name);
 
 CREATE TABLE IF NOT EXISTS type_hints (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -179,6 +188,7 @@ export function clearDatabase(db: Database.Database): void {
     DELETE FROM type_refs;
     DELETE FROM call_sites;
     DELETE FROM type_hints;
+    DELETE FROM implements;
     DELETE FROM imports;
     DELETE FROM symbols;
     DELETE FROM files;

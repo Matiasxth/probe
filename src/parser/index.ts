@@ -10,6 +10,9 @@ import { extractPython } from './extractors/python.js';
 import { extractGo } from './extractors/go.js';
 import { extractRust } from './extractors/rust.js';
 import { extractJava } from './extractors/java.js';
+import { extractRuby } from './extractors/ruby.js';
+import { extractCSharp } from './extractors/csharp.js';
+import { extractPhp } from './extractors/php.js';
 import { insertParsedFile } from '../storage/queries.js';
 import type { ParsedFile, ProbeConfig } from '../types.js';
 import { EXT_TO_LANG, LANG_EXTENSIONS } from '../types.js';
@@ -80,15 +83,18 @@ export async function parseProject(
     dot: false,
   });
 
-  // Additional filter: skip files inside directories containing their own package.json
-  // (nested projects like benchmarks/repos/**)
+  // Detect monorepo workspace packages (whitelisted nested projects)
+  const workspacePackages = detectWorkspacePackages(absRoot);
+
+  // Filter: skip files inside nested projects UNLESS they're workspace packages
   const nestedProjectDirs = new Set<string>();
   for (const f of files) {
     const parts = f.split('/');
-    // Check if any parent (excluding root) has a package.json/go.mod/setup.py
     for (let i = 1; i < parts.length - 1; i++) {
       const dir = parts.slice(0, i + 1).join('/');
       if (nestedProjectDirs.has(dir)) continue;
+      // Skip if this is a workspace package
+      if (workspacePackages.some((wp) => dir === wp || dir.startsWith(wp + '/'))) continue;
       const markerFiles = ['package.json', 'go.mod', 'setup.py', 'pyproject.toml', 'Cargo.toml'];
       for (const marker of markerFiles) {
         const markerPath = path.join(absRoot, dir, marker);
@@ -148,7 +154,7 @@ export async function parseProject(
         }
       }
 
-      const parsed = await parseFile(absPath, relPath);
+      const parsed = await parseFile(absPath, relPath, config.maxFileSize);
       if (parsed) {
         insertParsedFile(db, parsed);
         totalSymbols += parsed.symbols.length;
@@ -174,7 +180,7 @@ export async function parseProject(
   return { files: filtered.length, symbols: totalSymbols, skipped, errors };
 }
 
-async function parseFile(absPath: string, relPath: string): Promise<ParsedFile | null> {
+async function parseFile(absPath: string, relPath: string, maxFileSize: number = 512_000): Promise<ParsedFile | null> {
   const ext = path.extname(relPath);
   const language = EXT_TO_LANG[ext];
   if (!language) return null;
@@ -182,7 +188,7 @@ async function parseFile(absPath: string, relPath: string): Promise<ParsedFile |
   const source = fs.readFileSync(absPath, 'utf-8');
 
   // Skip very large files (>500KB)
-  if (source.length > 512_000) return null;
+  if (source.length > maxFileSize) return null;
 
   const hash = crypto.createHash('md5').update(source).digest('hex');
   const isTsx = ext === '.tsx' || ext === '.jsx';
@@ -221,6 +227,15 @@ async function parseFile(absPath: string, relPath: string): Promise<ParsedFile |
       break;
     case 'java':
       extracted = extractJava(tree, source);
+      break;
+    case 'ruby':
+      extracted = extractRuby(tree, source);
+      break;
+    case 'csharp':
+      extracted = extractCSharp(tree, source);
+      break;
+    case 'php':
+      extracted = extractPhp(tree, source);
       break;
     default:
       return null;
@@ -444,6 +459,52 @@ export function resolveCallGraph(db: Database.Database, root?: string): number {
   resolveTx();
 
   return resolvedCount;
+}
+
+/**
+ * Detect monorepo workspace packages from package.json workspaces or pnpm-workspace.yaml.
+ * Returns relative directory paths of workspace packages.
+ */
+function detectWorkspacePackages(root: string): string[] {
+  const packages: string[] = [];
+
+  // npm/yarn workspaces: package.json { "workspaces": ["packages/*"] }
+  const pkgJsonPath = path.join(root, 'package.json');
+  if (fs.existsSync(pkgJsonPath)) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf-8'));
+      const workspaces = pkg.workspaces;
+      const patterns: string[] = Array.isArray(workspaces) ? workspaces : workspaces?.packages ?? [];
+
+      for (const pattern of patterns) {
+        // Expand glob patterns like "packages/*"
+        const expanded = fg.sync(pattern, { cwd: root, onlyDirectories: true, absolute: false });
+        packages.push(...expanded);
+      }
+    } catch { /* ignore */ }
+  }
+
+  // pnpm-workspace.yaml
+  const pnpmPath = path.join(root, 'pnpm-workspace.yaml');
+  if (fs.existsSync(pnpmPath) && packages.length === 0) {
+    try {
+      const content = fs.readFileSync(pnpmPath, 'utf-8');
+      // Simple YAML parsing: extract packages list
+      const match = content.match(/packages:\s*\n((?:\s+-\s+.+\n?)*)/);
+      if (match) {
+        const lines = match[1].split('\n').filter((l) => l.trim().startsWith('-'));
+        for (const line of lines) {
+          const pattern = line.replace(/^\s*-\s*['"]?/, '').replace(/['"]?\s*$/, '');
+          if (pattern) {
+            const expanded = fg.sync(pattern, { cwd: root, onlyDirectories: true, absolute: false });
+            packages.push(...expanded);
+          }
+        }
+      }
+    } catch { /* ignore */ }
+  }
+
+  return packages.map((p) => p.replace(/\\/g, '/'));
 }
 
 // Cache for tsconfig path aliases and Go module path

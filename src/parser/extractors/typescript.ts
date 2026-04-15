@@ -128,6 +128,16 @@ export function extractTypeScript(tree: Parser.Tree, source: string, isTsx: bool
   let currentFunction: string | null = null;
   let currentClass: string | null = null;
 
+  function extractReturnType(node: Parser.SyntaxNode): string | undefined {
+    const retType = node.childForFieldName('return_type');
+    if (!retType) return undefined;
+    const text = retType.text.replace(/\s+/g, ' ').trim();
+    // Extract the primary type: Promise<User> → User, Result<User, Error> → User
+    const stripped = text.replace(/^Promise<(.+)>$/, '$1').replace(/^Result<(.+?),.+>$/, '$1');
+    if (stripped.length < 50 && /^[A-Z]/.test(stripped)) return stripped;
+    return undefined;
+  }
+
   function extractParamTypeHints(funcNode: Parser.SyntaxNode, funcName: string): void {
     const params = funcNode.childForFieldName('parameters');
     if (!params) return;
@@ -185,6 +195,7 @@ export function extractTypeScript(tree: Parser.Tree, source: string, isTsx: bool
         if (nameNode) {
           const name = nameNode.text;
           const tags = detectTags(node, name, 'function', isTsx);
+          const returnType = extractReturnType(node);
           symbols.push({
             name,
             kind: 'function',
@@ -196,6 +207,7 @@ export function extractTypeScript(tree: Parser.Tree, source: string, isTsx: bool
             isDefault: isDefaultExport(node),
             parentName: currentClass,
             tags: tags.length > 0 ? tags : undefined,
+            returnType,
           });
           const prevFunc = currentFunction;
           currentFunction = name;
@@ -286,6 +298,20 @@ export function extractTypeScript(tree: Parser.Tree, source: string, isTsx: bool
         if (nameNode) {
           const name = nameNode.text;
           const tags = detectTags(node, name, 'class', isTsx);
+          // Extract implements clause
+          const implInterfaces: string[] = [];
+          for (const child of node.namedChildren) {
+            if (child.type === 'class_heritage') {
+              for (const clause of child.namedChildren) {
+                if (clause.type === 'implements_clause') {
+                  for (const typeNode of clause.namedChildren) {
+                    const typeName = typeNode.text.split('<')[0].trim();
+                    if (typeName) implInterfaces.push(typeName);
+                  }
+                }
+              }
+            }
+          }
           symbols.push({
             name,
             kind: 'class',
@@ -297,6 +323,7 @@ export function extractTypeScript(tree: Parser.Tree, source: string, isTsx: bool
             isDefault: isDefaultExport(node),
             parentName: null,
             tags: tags.length > 0 ? tags : undefined,
+            implementsInterfaces: implInterfaces.length > 0 ? implInterfaces : undefined,
           });
           const prevClass = currentClass;
           currentClass = name;

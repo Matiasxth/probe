@@ -82,6 +82,7 @@ export function extractPython(tree: Parser.Tree, source: string): {
             isExported: isSymbolExported(name) && (isTopLevel || isMethod),
             isDefault: false,
             parentName: currentClass,
+            returnType: returnType ? extractPyReturnType(returnType.text) : undefined,
           });
 
           const prevFunc = currentFunction;
@@ -281,6 +282,17 @@ export function extractPython(tree: Parser.Tree, source: string): {
 
   walk(tree.rootNode);
   return { symbols, imports, callSites };
+}
+
+function extractPyReturnType(text: string): string | undefined {
+  // Optional[User] → User, List[User] → User, User | None → User
+  let t = text.trim();
+  t = t.replace(/^Optional\[(.+)\]$/, '$1');
+  t = t.replace(/^List\[(.+)\]$/, '$1');
+  t = t.replace(/\s*\|\s*None$/, '');
+  t = t.split('[')[0].split('|')[0].trim();
+  if (t.length < 50 && /^[A-Z]/.test(t)) return t;
+  return undefined;
 }
 
 /**

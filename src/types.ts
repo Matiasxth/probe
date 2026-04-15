@@ -4,6 +4,7 @@ export interface ProbeConfig {
   version: number;
   exclude: string[];
   languages: string[];
+  maxFileSize: number;
   gitHistory: {
     maxCommits: number;
     minCoChangeConfidence: number;
@@ -13,7 +14,8 @@ export interface ProbeConfig {
 export const DEFAULT_CONFIG: ProbeConfig = {
   version: 1,
   exclude: ['node_modules', 'dist', 'build', '.git', 'vendor', '__pycache__', '.probe', 'coverage', '.next', '.nuxt'],
-  languages: ['typescript', 'javascript', 'python', 'go', 'rust', 'java'],
+  languages: ['typescript', 'javascript', 'python', 'go', 'rust', 'java', 'ruby', 'csharp', 'php'],
+  maxFileSize: 512_000,
   gitHistory: {
     maxCommits: 500,
     minCoChangeConfidence: 0.5,
@@ -29,6 +31,9 @@ export const LANG_EXTENSIONS: Record<string, string[]> = {
   go: ['.go'],
   rust: ['.rs'],
   java: ['.java'],
+  ruby: ['.rb'],
+  csharp: ['.cs'],
+  php: ['.php'],
 };
 
 export const EXT_TO_LANG: Record<string, string> = Object.fromEntries(
@@ -125,6 +130,8 @@ export interface ParsedSymbol {
   isDefault: boolean;
   parentName: string | null;
   tags?: string[];
+  returnType?: string;
+  implementsInterfaces?: string[];
 }
 
 export interface ParsedImport {

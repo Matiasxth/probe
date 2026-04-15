@@ -15,6 +15,9 @@ const WASM_MAP: Record<string, string> = {
   go: 'tree-sitter-go.wasm',
   rust: 'tree-sitter-rust.wasm',
   java: 'tree-sitter-java.wasm',
+  ruby: 'tree-sitter-ruby.wasm',
+  csharp: 'tree-sitter-c_sharp.wasm',
+  php: 'tree-sitter-php.wasm',
 };
 
 async function init(): Promise<void> {
